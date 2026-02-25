@@ -83,15 +83,6 @@ Tag-driven publish (default):
 3. Create and push matching tag `vX.Y.Z`.
 4. `Rust CLI Publish (crates.io)` runs verify, build, dry-run, then publish.
 
-Manual Actions run:
-
-- Open Actions -> `Rust CLI Publish (crates.io)` -> `Run workflow`.
-- Set `release_tag` (example: `v0.1.0`).
-- Set `publish=false` to run checks and dry-run only.
-- Set `publish=true` to execute crates.io publish.
-
-The tag version must exactly match `rust/Cargo.toml` version.
-
 
 ## Maintainer
 
