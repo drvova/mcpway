@@ -9,12 +9,31 @@ permissions:
 
 jobs:
   verify:
-    name: Rust check, lint, test (${{ matrix.os }})
-    runs-on: ${{ matrix.os }}
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [ubuntu-latest, macos-latest]
+    name: Rust check, lint, test
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Cache cargo artifacts
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: .
+
+      - name: Run verification
+        working-directory: rust
+        # Keep test runtime bounded; parity tests use deterministic local fixtures only.
+        run: ./scripts/verify.sh
+
+  verify-macos:
+    name: Rust check, lint, test (macOS)
+    runs-on: macos-latest
 
     steps:
       - name: Checkout
