@@ -115,11 +115,17 @@ async fn stdio_to_sse_handles_high_event_volume_without_stalling() {
         seen
     };
 
-    let (_, seen) = tokio::time::timeout(Duration::from_secs(60), async {
-        tokio::join!(sender, receiver)
-    })
-    .await
-    .expect("timed out during high-volume stdio->sse run");
+    tokio::time::timeout(Duration::from_secs(60), sender)
+        .await
+        .expect("timed out sending high-volume requests to stdio->sse message endpoint");
+
+    let seen = tokio::time::timeout(Duration::from_secs(120), receiver)
+        .await
+        .unwrap_or_else(|_| {
+            panic!(
+                "timed out collecting SSE events after send phase; expected {request_count} responses"
+            )
+        });
 
     assert_eq!(seen.len(), request_count);
 

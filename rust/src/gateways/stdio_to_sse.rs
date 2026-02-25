@@ -20,7 +20,8 @@ use crate::support::cors::build_cors_layer;
 use crate::support::signals::install_signal_handlers;
 use crate::support::stdio_child::StdioChild;
 
-const SESSION_EVENT_BUFFER: usize = 256;
+// Keep enough per-session queue headroom for high-volume bursts observed in CI.
+const SESSION_EVENT_BUFFER: usize = 1024;
 
 #[derive(Clone)]
 struct AppState {
