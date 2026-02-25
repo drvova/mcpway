@@ -114,9 +114,12 @@ jobs:
         working-directory: rust
         run: cargo package --list
 
-      - name: Publish dry run
+      - name: Publish dry run (manual dry-run mode)
+        if: github.event_name == 'workflow_dispatch' && inputs.publish != true
         working-directory: rust
-        run: cargo publish --dry-run
+        run: |
+          echo "workflow_dispatch publish=false -> running dry-run only (no upload)"
+          cargo publish --dry-run
 
       - name: Publish stable crate
         if: github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.publish == true)
