@@ -1,3 +1,4 @@
+# mcpway
 
 [![crates.io](https://img.shields.io/crates/v/mcpway.svg)](https://crates.io/crates/mcpway)
 
@@ -10,6 +11,7 @@
 ```bash
 cargo install mcpway
 ```
+
 Crates.io: <https://crates.io/crates/mcpway>
 
 ## Quick Start
@@ -17,6 +19,37 @@ Crates.io: <https://crates.io/crates/mcpway>
 ```bash
 cargo build --release -p mcpway
 ./target/release/mcpway --stdio "./my-mcp-server --root ." --port 8000
+```
+
+## Bridge Modes
+
+Examples of supported input/output pairs:
+
+```bash
+# stdio -> sse (default output for --stdio)
+mcpway --stdio "./my-mcp-server --root ." --port 8000
+
+# stdio -> stdio (managed relay mode)
+mcpway --stdio "./my-mcp-server --root ." --outputTransport stdio
+
+# stdio -> ws
+mcpway --stdio "./my-mcp-server --root ." --outputTransport ws --port 8000
+
+# stdio -> streamable-http
+mcpway --stdio "./my-mcp-server --root ." --outputTransport streamableHttp --port 8000
+
+# sse -> stdio
+mcpway --sse https://example.com/sse
+
+# streamable-http -> stdio
+mcpway --streamableHttp https://example.com/mcp
+```
+
+For endpoint-first usage, use `connect`:
+
+```bash
+mcpway connect https://example.com/mcp
+mcpway connect wss://example.com/ws --protocol ws
 ```
 
 ## Cargo Workspace
@@ -46,35 +79,26 @@ Commands:
 - `mcpway logs <COMMAND>`
 - `mcpway logs tail [OPTIONS]`
 
-### `mcpway [OPTIONS]`
+### mcpway [OPTIONS]
 `--stdio` `--sse` `--streamableHttp` `--outputTransport` `--port` `--baseUrl` `--ssePath` `--messagePath` `--streamableHttpPath` `--logLevel` `--cors` `--healthEndpoint` `--header` `--env` `--oauth2Bearer` `--stateful` `--sessionTimeout` `--protocolVersion` `--runtimePrompt` `--runtimeAdminPort`
 
-### `mcpway generate`
+### mcpway generate
 `--definition` `--server` `--out` `--artifact-name` `--bundle-mcpway` `--no-bundle-mcpway` `--mcpway-binary` `--compile-wrapper` `--no-compile-wrapper`
 
-### `mcpway regenerate`
+### mcpway regenerate
 `--metadata` `--definition` `--server` `--out` `--bundle-mcpway` `--no-bundle-mcpway` `--mcpway-binary` `--compile-wrapper` `--no-compile-wrapper`
 
-### `mcpway connect`
+### mcpway connect
 `--server` `--stdio-cmd` `--stdio-arg` `--stdio-env` `--stdio-wrapper` `--save-wrapper` `--protocol` `--header` `--oauth2Bearer` `--oauth-profile` `--oauth-issuer` `--oauth-client-id` `--oauth-scope` `--oauth-flow` `--oauth-no-browser` `--oauth-cache` `--oauth-login` `--oauth-logout` `--oauth-audience` `--save-profile` `--registry` `--profile-name` `--logLevel` `--protocolVersion`
 
-### `mcpway discover`
+### mcpway discover
 `--from` `--project-root` `--json` `--strict-conflicts`
 
-### `mcpway import`
+### mcpway import
 `--from` `--project-root` `--json` `--strict-conflicts` `--registry` `--save-profiles` `--bundle-mcpway` `--compile-wrapper`
 
-### `mcpway logs tail`
+### mcpway logs tail
 `--file` `--lines` `--level` `--transport` `--json` `--no-follow`
-
-For detailed command docs, run:
-
-```bash
-mcpway --help
-mcpway connect --help
-mcpway logs --help
-mcpway logs tail --help
-```
 
 ## Maintainer
 
