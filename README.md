@@ -74,16 +74,6 @@ mcpway logs --help
 mcpway logs tail --help
 ```
 
-## Release Process
-
-Tag-driven publish (default):
-
-1. Bump `version` in `rust/Cargo.toml`.
-2. Commit and push to `main`.
-3. Create and push matching tag `vX.Y.Z`.
-4. `Rust CLI Publish (crates.io)` runs verify, build, dry-run, then publish.
-
-
 ## Maintainer
 
 [@drvova](https://github.com/drvova)
