@@ -29,9 +29,9 @@ jobs:
         with:
           workspaces: .
 
-      - name: Run no-Docker verification
+      - name: Run verification
         working-directory: rust
-        run: ./scripts/verify_no_docker.sh
+        run: ./scripts/verify.sh
 
   build-matrix:
     name: Build matrix (${{ matrix.os }})

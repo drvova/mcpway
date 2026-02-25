@@ -1,4 +1,4 @@
-name: Rust Verification (No Docker)
+name: Rust Verification
 
 on:
   pull_request:
@@ -26,7 +26,7 @@ jobs:
         with:
           workspaces: .
 
-      - name: Run no-Docker verification
+      - name: Run verification
         working-directory: rust
         # Keep test runtime bounded; parity tests use deterministic local fixtures only.
-        run: ./scripts/verify_no_docker.sh
+        run: ./scripts/verify.sh
