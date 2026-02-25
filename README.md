@@ -74,33 +74,6 @@ mcpway logs --help
 mcpway logs tail --help
 ```
 
-## Public Repository Safety
-
-- Do not commit credentials, tokens, private keys, or production endpoints.
-- Use repository or organization secrets for CI publishing credentials.
-- Report vulnerabilities privately; see [SECURITY.md](./SECURITY.md).
-
-## Release Process
-
-1. Verify a clean tree and run checks from repo root:
-
-```bash
-git status --short
-cargo fmt --check -p mcpway
-cargo clippy -p mcpway --all-targets --all-features -- -D warnings
-cargo test -p mcpway
-cargo publish --manifest-path rust/Cargo.toml --dry-run
-```
-
-2. Bump `version` in `rust/Cargo.toml`, commit, and push to `main`.
-3. Create an annotated tag that exactly matches the crate version:
-
-```bash
-git tag -a vX.Y.Z -m "mcpway vX.Y.Z"
-git push origin vX.Y.Z
-```
-
-4. GitHub Actions publishes only from `v*.*.*` tags after verify + build + dry-run gates pass.
 
 ## Maintainer
 
