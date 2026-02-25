@@ -286,21 +286,14 @@ async fn send_request(
     pool_key: &str,
     message: &serde_json::Value,
 ) -> serde_json::Value {
-    let mut req = http.post(url).json(message);
-    for (k, v) in headers.iter() {
-        req = req.header(k, v);
-    }
+    let mut req = apply_request_headers(http.post(url).json(message), headers);
     if let Some(sid) = session_id.read().await.clone() {
-        req = req.header("Mcp-Session-Id", sid);
+        req = req.header("mcp-session-id", sid);
     }
     match req.send().await {
         Ok(resp) => {
             pool.mark_success(pool_key, "streamable-http").await;
-            if let Some(sid) = resp
-                .headers()
-                .get("Mcp-Session-Id")
-                .and_then(|v| v.to_str().ok())
-            {
+            if let Some(sid) = extract_session_id(resp.headers()) {
                 *session_id.write().await = Some(sid.to_string());
             }
             match parse_response_payload(resp).await {
@@ -321,20 +314,13 @@ async fn send_initialized_notification(
     pool_key: &str,
 ) -> Result<(), String> {
     let message = create_initialized_notification();
-    let mut req = http.post(url).json(&message);
-    for (k, v) in headers.iter() {
-        req = req.header(k, v);
-    }
+    let mut req = apply_request_headers(http.post(url).json(&message), headers);
     if let Some(sid) = session_id.read().await.clone() {
-        req = req.header("Mcp-Session-Id", sid);
+        req = req.header("mcp-session-id", sid);
     }
     let response = req.send().await.map_err(|err| err.to_string())?;
     pool.mark_success(pool_key, "streamable-http").await;
-    if let Some(sid) = response
-        .headers()
-        .get("Mcp-Session-Id")
-        .and_then(|v| v.to_str().ok())
-    {
+    if let Some(sid) = extract_session_id(response.headers()) {
         *session_id.write().await = Some(sid.to_string());
     }
     if response.status().is_success() {
@@ -349,6 +335,12 @@ async fn send_initialized_notification(
 
 async fn parse_response_payload(resp: reqwest::Response) -> Result<serde_json::Value, String> {
     let status = resp.status();
+    let content_type = resp
+        .headers()
+        .get(reqwest::header::CONTENT_TYPE)
+        .and_then(|value| value.to_str().ok())
+        .map(|value| value.to_lowercase())
+        .unwrap_or_default();
     let text = resp.text().await.map_err(|err| err.to_string())?;
     if text.trim().is_empty() {
         if status.is_success() {
@@ -356,7 +348,7 @@ async fn parse_response_payload(resp: reqwest::Response) -> Result<serde_json::V
         }
         return Err(format!("Request failed with status {}", status));
     }
-    let json: serde_json::Value = serde_json::from_str(&text).map_err(|err| err.to_string())?;
+    let json = parse_response_body(&content_type, &text)?;
     if !status.is_success() {
         if let Some(error) = json.get("error") {
             return Ok(serde_json::json!({ "error": error }));
@@ -421,5 +413,118 @@ fn normalize_error_message(code: i64, message: &str) -> String {
         message[prefix.len()..].trim().to_string()
     } else {
         message.to_string()
+    }
+}
+
+fn apply_request_headers(
+    mut req: reqwest::RequestBuilder,
+    headers: &HeadersMap,
+) -> reqwest::RequestBuilder {
+    let mut has_accept = false;
+    for (key, value) in headers {
+        if key.eq_ignore_ascii_case("accept") {
+            has_accept = true;
+        }
+        req = req.header(key, value);
+    }
+    if !has_accept {
+        req = req.header(reqwest::header::ACCEPT, "application/json, text/event-stream");
+    }
+    req
+}
+
+fn extract_session_id(headers: &reqwest::header::HeaderMap) -> Option<String> {
+    headers
+        .get("mcp-session-id")
+        .or_else(|| headers.get("Mcp-Session-Id"))
+        .and_then(|value| value.to_str().ok())
+        .map(str::to_owned)
+}
+
+fn parse_response_body(content_type: &str, body: &str) -> Result<serde_json::Value, String> {
+    if content_type.contains("text/event-stream") {
+        return parse_event_stream_body(body);
+    }
+    serde_json::from_str(body).map_err(|err| err.to_string())
+}
+
+fn parse_event_stream_body(body: &str) -> Result<serde_json::Value, String> {
+    let mut data_lines: Vec<String> = Vec::new();
+    for raw in body.lines() {
+        let line = raw.trim_end_matches('\r');
+        if line.is_empty() {
+            if let Some(json) = parse_sse_event_data(&data_lines) {
+                return Ok(json);
+            }
+            data_lines.clear();
+            continue;
+        }
+        if let Some(data) = line.strip_prefix("data:") {
+            data_lines.push(data.trim_start().to_string());
+        }
+    }
+    if let Some(json) = parse_sse_event_data(&data_lines) {
+        return Ok(json);
+    }
+    serde_json::from_str(body).map_err(|_| "No JSON payload found in event-stream response".into())
+}
+
+fn parse_sse_event_data(data_lines: &[String]) -> Option<serde_json::Value> {
+    if data_lines.is_empty() {
+        return None;
+    }
+    let payload = data_lines.join("\n");
+    serde_json::from_str(&payload).ok()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parses_plain_json_response_body() {
+        let value = parse_response_body("application/json", "{\"result\":{\"ok\":true}}")
+            .expect("application/json body should parse");
+        assert_eq!(value["result"]["ok"], serde_json::json!(true));
+    }
+
+    #[test]
+    fn parses_sse_framed_json_response_body() {
+        let value = parse_response_body(
+            "text/event-stream",
+            "event: message\ndata: {\"result\":{\"ok\":true},\"id\":1,\"jsonrpc\":\"2.0\"}\n\n",
+        )
+        .expect("text/event-stream body should parse first data payload");
+        assert_eq!(value["result"]["ok"], serde_json::json!(true));
+    }
+
+    #[test]
+    fn extracts_session_id_case_insensitive() {
+        let mut headers = reqwest::header::HeaderMap::new();
+        headers.insert(
+            reqwest::header::HeaderName::from_static("mcp-session-id"),
+            reqwest::header::HeaderValue::from_static("session-123"),
+        );
+        assert_eq!(extract_session_id(&headers).as_deref(), Some("session-123"));
+    }
+
+    #[test]
+    fn apply_request_headers_sets_accept_when_missing() {
+        let client = reqwest::Client::new();
+        let headers = HeadersMap::new();
+        let request = apply_request_headers(
+            client
+                .post("http://127.0.0.1:9/mcp")
+                .json(&serde_json::json!({"ping": true})),
+            &headers,
+        )
+        .build()
+        .expect("request should build");
+        let accept = request
+            .headers()
+            .get(reqwest::header::ACCEPT)
+            .and_then(|value| value.to_str().ok())
+            .unwrap_or_default();
+        assert_eq!(accept, "application/json, text/event-stream");
     }
 }
