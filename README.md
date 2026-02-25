@@ -1,4 +1,3 @@
-# mcpway
 
 [![crates.io](https://img.shields.io/crates/v/mcpway.svg)](https://crates.io/crates/mcpway)
 
