@@ -89,7 +89,7 @@ pub async fn run(
                     continue;
                 }
 
-                let outbound = Message::Text(message_json.to_string());
+                let outbound = Message::Text(message_json.to_string().into());
                 ws_writer
                     .send(outbound)
                     .await

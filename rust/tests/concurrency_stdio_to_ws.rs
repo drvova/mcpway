@@ -53,7 +53,7 @@ async fn stdio_to_ws_handles_many_parallel_clients() {
             let request_id = format!("ws-concurrency-{idx}");
             let request = initialize_request(&request_id);
             socket
-                .send(Message::Text(request.to_string()))
+                .send(Message::Text(request.to_string().into()))
                 .await
                 .expect("failed to send websocket request");
 

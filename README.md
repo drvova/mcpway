@@ -10,7 +10,6 @@
 ```bash
 cargo install mcpway
 ```
-
 Crates.io: <https://crates.io/crates/mcpway>
 
 ## Quick Start
