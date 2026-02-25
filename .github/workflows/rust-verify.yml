@@ -57,3 +57,11 @@ jobs:
         working-directory: rust
         # Keep test runtime bounded; parity tests use deterministic local fixtures only.
         run: ./scripts/verify.sh
+
+  verify-required:
+    name: Rust check, lint, test
+    runs-on: ubuntu-latest
+    needs: [verify, verify-macos]
+    steps:
+      - name: Required check gate
+        run: echo "All verification jobs passed."
