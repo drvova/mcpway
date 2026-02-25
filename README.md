@@ -1,4 +1,4 @@
-# mcpway
+
 
 ![MCPway](./mcpway-ascii-logo.svg)
 
