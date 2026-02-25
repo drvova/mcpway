@@ -8,16 +8,8 @@
 
 ## Install
 
-Primary package:
-
 ```bash
 cargo install mcpway
-```
-
-Fallback package name (if `mcpway` is unavailable on crates.io):
-
-```bash
-cargo install mcpway-cli
 ```
 
 The installed command is:

@@ -2,16 +2,8 @@ name: Rust CLI Publish (crates.io)
 
 on:
   push:
-    branches:
-      - main
     tags:
       - "v*.*.*"
-    paths:
-      - "rust/**"
-      - ".github/workflows/rust-publish-crate.yml"
-      - ".github/workflows/rust-verify.yml"
-      - "README.md"
-  workflow_dispatch:
 
 permissions:
   contents: read
@@ -35,7 +27,7 @@ jobs:
       - name: Cache cargo artifacts
         uses: Swatinem/rust-cache@v2
         with:
-          workspaces: rust
+          workspaces: .
 
       - name: Run no-Docker verification
         working-directory: rust
@@ -59,32 +51,10 @@ jobs:
       - name: Cache cargo artifacts
         uses: Swatinem/rust-cache@v2
         with:
-          workspaces: rust
+          workspaces: .
 
       - name: Build release
-        run: cargo build --manifest-path rust/Cargo.toml --release
-
-  publish-dev:
-    name: Publish dev prerelease (main)
-    needs: [verify-linux, build-matrix]
-    runs-on: ubuntu-latest
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Set up Rust
-        uses: dtolnay/rust-toolchain@stable
-
-      - name: Cache cargo artifacts
-        uses: Swatinem/rust-cache@v2
-        with:
-          workspaces: rust
-
-      - name: Publish dev crate
-        env:
-          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
-        run: ./rust/scripts/publish_crate.sh dev
+        run: cargo build --release -p mcpway
 
   publish-stable:
     name: Publish stable crate (tag)
@@ -101,7 +71,30 @@ jobs:
       - name: Cache cargo artifacts
         uses: Swatinem/rust-cache@v2
         with:
-          workspaces: rust
+          workspaces: .
+
+      - name: Validate tag matches manifest version
+        shell: bash
+        run: |
+          set -euo pipefail
+          TAG_VERSION="${GITHUB_REF_NAME#v}"
+          MANIFEST_VERSION="$(awk -F'"' '/^version = / {print $2; exit}' rust/Cargo.toml)"
+          if [[ -z "$MANIFEST_VERSION" ]]; then
+            echo "Could not parse version from rust/Cargo.toml" >&2
+            exit 1
+          fi
+          if [[ "$TAG_VERSION" != "$MANIFEST_VERSION" ]]; then
+            echo "Tag version ($TAG_VERSION) does not match rust/Cargo.toml version ($MANIFEST_VERSION)." >&2
+            exit 1
+          fi
+
+      - name: Package preview
+        working-directory: rust
+        run: cargo package --list
+
+      - name: Publish dry run
+        working-directory: rust
+        run: cargo publish --dry-run
 
       - name: Publish stable crate
         env:

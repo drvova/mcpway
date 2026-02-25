@@ -11,8 +11,19 @@ cargo install mcpway
 ## Quick Start
 
 ```bash
-cargo build --release --manifest-path rust/Cargo.toml
-./rust/target/release/mcpway --stdio "./my-mcp-server --root ." --port 8000
+cargo build --release -p mcpway
+./target/release/mcpway --stdio "./my-mcp-server --root ." --port 8000
+```
+
+## Cargo Workspace
+
+Run from repository root:
+
+```bash
+cargo metadata --no-deps
+cargo check -p mcpway
+cargo test -p mcpway
+cargo run -p mcpway -- --help
 ```
 
 ## Commands & Shortcuts
@@ -51,6 +62,28 @@ Commands:
 
 ### `mcpway logs tail`
 `--file` `--lines` `--level` `--transport` `--json` `--no-follow`
+
+## Release (Public-Safe)
+
+1. Verify a clean tree and run checks from repo root:
+
+```bash
+git status --short
+cargo fmt --check -p mcpway
+cargo clippy -p mcpway --all-targets --all-features -- -D warnings
+cargo test -p mcpway
+cargo publish --manifest-path rust/Cargo.toml --dry-run
+```
+
+2. Bump `version` in `rust/Cargo.toml`, commit, and push to `main`.
+3. Create an annotated tag that exactly matches the crate version:
+
+```bash
+git tag -a vX.Y.Z -m "mcpway vX.Y.Z"
+git push origin vX.Y.Z
+```
+
+4. GitHub Actions publishes only from `v*.*.*` tags after verify + build + dry-run gates pass.
 
 ## Maintainer
 

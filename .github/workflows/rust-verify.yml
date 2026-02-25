@@ -24,7 +24,7 @@ jobs:
       - name: Cache cargo artifacts
         uses: Swatinem/rust-cache@v2
         with:
-          workspaces: rust
+          workspaces: .
 
       - name: Run no-Docker verification
         working-directory: rust
