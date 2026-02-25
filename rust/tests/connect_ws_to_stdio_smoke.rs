@@ -73,9 +73,9 @@ async fn run_ws_roundtrip(binary_response: bool, request_id: &str) {
                             .to_string();
 
                             let outbound = if binary_response {
-                                Message::Binary(response.into_bytes())
+                                Message::Binary(response.into_bytes().into())
                             } else {
-                                Message::Text(response)
+                                Message::Text(response.into())
                             };
                             ws.send(outbound)
                                 .await

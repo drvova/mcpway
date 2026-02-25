@@ -46,7 +46,7 @@ async fn stdio_to_ws_roundtrip_smoke() {
 
     let initialize = initialize_request("ws-init");
     socket
-        .send(Message::Text(initialize.to_string()))
+        .send(Message::Text(initialize.to_string().into()))
         .await
         .expect("failed to send initialize message over websocket");
 
