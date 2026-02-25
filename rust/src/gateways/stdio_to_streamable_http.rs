@@ -495,7 +495,18 @@ impl Session {
         let mut rx = self.child.subscribe();
         let this = self.clone();
         tokio::spawn(async move {
-            while let Ok(msg) = rx.recv().await {
+            loop {
+                let msg = match rx.recv().await {
+                    Ok(msg) => msg,
+                    Err(tokio::sync::broadcast::error::RecvError::Lagged(skipped)) => {
+                        tracing::warn!(
+                            "stdio->streamable-http child output receiver lagged by {skipped} messages; continuing"
+                        );
+                        continue;
+                    }
+                    Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+                };
+
                 if let Some(id) = msg.get("id").and_then(|v| v.as_str()) {
                     let sender = {
                         let mut pending = this.pending.lock().await;

@@ -11,6 +11,9 @@ use tokio_util::codec::{FramedRead, LinesCodec};
 
 use crate::types::RuntimeArgs;
 
+// Keep enough headroom for bursty integration/CI traffic before consumers drain.
+const CHILD_BROADCAST_BUFFER: usize = 2048;
+
 #[derive(Debug, Clone)]
 pub struct CommandSpec {
     pub program: String,
@@ -42,7 +45,7 @@ pub struct StdioChild {
 
 impl StdioChild {
     pub fn new(spec: CommandSpec, exit_on_close: bool) -> Self {
-        let (sender, _) = broadcast::channel(256);
+        let (sender, _) = broadcast::channel(CHILD_BROADCAST_BUFFER);
         Self {
             spec,
             stdin: Mutex::new(None),
