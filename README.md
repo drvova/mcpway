@@ -1,6 +1,8 @@
+# mcpway
 
+[![crates.io](https://img.shields.io/crates/v/mcpway.svg)](https://crates.io/crates/mcpway)
 
-![MCPway](./mcpway-ascii-logo.svg)
+![MCPway](https://raw.githubusercontent.com/drvova/mcpway/main/mcpway-ascii-logo.svg)
 
 `mcpway` runs MCP stdio servers over SSE, WebSocket, and Streamable HTTP.
 
@@ -9,6 +11,8 @@
 ```bash
 cargo install mcpway
 ```
+
+Crates.io: <https://crates.io/crates/mcpway>
 
 ## Quick Start
 
