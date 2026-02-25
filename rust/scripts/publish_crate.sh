@@ -44,6 +44,5 @@ echo "Publishing $PACKAGE_NAME@$MANIFEST_VERSION from tag $REF_NAME"
 export CARGO_REGISTRIES_CRATES_IO_PROTOCOL=sparse
 
 cargo package --list
-cargo publish --dry-run
 cargo publish --token "$CARGO_REGISTRY_TOKEN"
 echo "Publish succeeded for $PACKAGE_NAME@$MANIFEST_VERSION"
