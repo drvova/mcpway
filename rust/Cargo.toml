@@ -1,13 +1,13 @@
 [package]
 name = "mcpway"
-version = "0.0.1"
+version = "0.0.2"
 edition = "2021"
 description = "Run MCP stdio servers over SSE, WebSocket, and Streamable HTTP transports."
 license = "MIT"
 repository = "https://github.com/drvova/mcpway"
 homepage = "https://github.com/drvova/mcpway"
 documentation = "https://docs.rs/mcpway"
-readme = "README.md"
+readme = "../README.md"
 keywords = ["mcp", "sse", "websocket", "streamable-http", "gateway"]
 categories = ["command-line-utilities", "network-programming"]
 
