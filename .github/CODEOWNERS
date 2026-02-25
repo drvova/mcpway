@@ -1,7 +1,2 @@
 # Default owner for all files.
 * @drvova
-
-# Release-critical files.
-/.github/workflows/rust-publish-crate.yml @drvova
-/rust/Cargo.toml @drvova
-/rust/scripts/publish_crate.sh @drvova
