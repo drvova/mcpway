@@ -12,9 +12,9 @@ if [[ -z "${CARGO_REGISTRY_TOKEN:-}" ]]; then
   exit 1
 fi
 
-REF_NAME="${GITHUB_REF_NAME:-}"
+REF_NAME="${MCPWAY_RELEASE_TAG:-${RELEASE_TAG:-${GITHUB_REF_NAME:-}}}"
 if [[ -z "$REF_NAME" ]]; then
-  echo "GITHUB_REF_NAME is required (expected tag like v0.1.0)" >&2
+  echo "Release tag is required via MCPWAY_RELEASE_TAG, RELEASE_TAG, or GITHUB_REF_NAME (expected v0.1.0)" >&2
   exit 1
 fi
 

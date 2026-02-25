@@ -184,5 +184,5 @@ jobs:
       - name: Publish stable crate
         env:
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
-          GITHUB_REF_NAME: ${{ env.RELEASE_TAG }}
+          MCPWAY_RELEASE_TAG: ${{ env.RELEASE_TAG }}
         run: ./rust/scripts/publish_crate.sh stable
