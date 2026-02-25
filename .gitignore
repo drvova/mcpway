@@ -1,3 +1,4 @@
 rust/target
+target/
 inspector/node_modules
 inspector/.astro
