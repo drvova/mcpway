@@ -108,7 +108,18 @@ pub async fn run(
 
     let mut rx = child.subscribe();
     tokio::spawn(async move {
-        while let Ok(msg) = rx.recv().await {
+        loop {
+            let msg = match rx.recv().await {
+                Ok(msg) => msg,
+                Err(tokio::sync::broadcast::error::RecvError::Lagged(skipped)) => {
+                    tracing::warn!(
+                        "stdio->ws child output receiver lagged by {skipped} messages; continuing"
+                    );
+                    continue;
+                }
+                Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+            };
+
             let mut target_id: Option<String> = None;
             let mut outgoing = msg.clone();
             if let Some((client_id, raw_id)) = strip_prefixed_id(&msg) {

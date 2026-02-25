@@ -122,7 +122,18 @@ pub async fn run(
 
     let mut rx = child.subscribe();
     tokio::spawn(async move {
-        while let Ok(msg) = rx.recv().await {
+        loop {
+            let msg = match rx.recv().await {
+                Ok(msg) => msg,
+                Err(tokio::sync::broadcast::error::RecvError::Lagged(skipped)) => {
+                    tracing::warn!(
+                        "stdio->sse child output receiver lagged by {skipped} messages; continuing"
+                    );
+                    continue;
+                }
+                Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+            };
+
             let json = match serde_json::to_string(&msg) {
                 Ok(val) => val,
                 Err(_) => continue,
