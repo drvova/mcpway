@@ -4,6 +4,17 @@ on:
   push:
     tags:
       - "v*.*.*"
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: "Tag to publish (for example: v0.1.0)"
+        required: true
+        type: string
+      publish:
+        description: "If false, run verify/build/dry-run only"
+        required: true
+        default: false
+        type: boolean
 
 permissions:
   contents: read
@@ -60,7 +71,9 @@ jobs:
     name: Publish stable crate (tag)
     needs: [verify-linux, build-matrix]
     runs-on: ubuntu-latest
-    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    if: |
+      (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')) ||
+      (github.event_name == 'workflow_dispatch' && startsWith(inputs.release_tag, 'v'))
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -77,7 +90,16 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          TAG_VERSION="${GITHUB_REF_NAME#v}"
+          REF_NAME="${GITHUB_REF_NAME}"
+          if [[ "${GITHUB_EVENT_NAME}" == "workflow_dispatch" ]]; then
+            REF_NAME="${{ inputs.release_tag }}"
+          fi
+          if [[ ! "$REF_NAME" =~ ^v[0-9]+\.[0-9]+\.[0-9]+([-.][0-9A-Za-z.]+)?$ ]]; then
+            echo "Release tag must match v<semver> (received: $REF_NAME)." >&2
+            exit 1
+          fi
+          echo "RELEASE_TAG=$REF_NAME" >> "$GITHUB_ENV"
+          TAG_VERSION="${REF_NAME#v}"
           MANIFEST_VERSION="$(awk -F'"' '/^version = / {print $2; exit}' rust/Cargo.toml)"
           if [[ -z "$MANIFEST_VERSION" ]]; then
             echo "Could not parse version from rust/Cargo.toml" >&2
@@ -97,6 +119,8 @@ jobs:
         run: cargo publish --dry-run
 
       - name: Publish stable crate
+        if: github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.publish == true)
         env:
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+          GITHUB_REF_NAME: ${{ env.RELEASE_TAG }}
         run: ./rust/scripts/publish_crate.sh stable
