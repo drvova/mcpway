@@ -1,0 +1,7 @@
+{
+  "ignore_dockerfile": true,
+  "rust": {
+    "app_dir": "rust",
+    "entry": "mcpway"
+  }
+}

@@ -1,0 +1,47 @@
+[package]
+name = "mcpway"
+version = "0.1.0"
+edition = "2021"
+description = "Run MCP stdio servers over SSE, WebSocket, and Streamable HTTP transports."
+license = "MIT"
+repository = "https://github.com/drvova/mcpway"
+homepage = "https://github.com/drvova/mcpway"
+readme = "README.md"
+keywords = ["mcp", "sse", "websocket", "streamable-http", "gateway"]
+categories = ["command-line-utilities", "network-programming"]
+
+[[bin]]
+name = "mcpway"
+path = "src/main.rs"
+
+[dependencies]
+axum = { version = "0.7", features = ["json", "ws"] }
+tokio = { version = "1.38", features = ["full"] }
+tokio-util = { version = "0.7", features = ["codec"] }
+tokio-stream = { version = "0.1", features = ["sync"] }
+tokio-tungstenite = "0.24"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+toml = "0.8"
+clap = { version = "4.5", features = ["derive"] }
+reqwest = { version = "0.12", features = ["json", "stream"] }
+url = "2.5"
+regex = "1.10"
+uuid = { version = "1.7", features = ["v4"] }
+futures = "0.3"
+eventsource-stream = "0.2"
+shell-words = "1.1"
+sha2 = "0.10"
+tower-http = { version = "0.5", features = ["cors"] }
+arc-swap = "1.7"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
+tracing-opentelemetry = "0.32"
+opentelemetry = "0.31"
+opentelemetry_sdk = "0.31"
+opentelemetry-otlp = "0.31"
+opentelemetry-appender-tracing = "0.31"
+
+[profile.release]
+codegen-units = 1
+lto = true

@@ -1,0 +1,32 @@
+name: Rust Verification (No Docker)
+
+on:
+  pull_request:
+  push:
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    name: Rust check, lint, test
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Cache cargo artifacts
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: rust
+
+      - name: Run no-Docker verification
+        working-directory: rust
+        # Keep test runtime bounded; parity tests use deterministic local fixtures only.
+        run: ./scripts/verify_no_docker.sh
