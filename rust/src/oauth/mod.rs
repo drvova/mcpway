@@ -598,7 +598,7 @@ fn try_open_browser(url: &str) -> Result<(), String> {
             .arg(url)
             .status()
             .map_err(|err| format!("Failed to launch browser via open: {err}"))?;
-        return Ok(());
+        Ok(())
     }
 
     #[cfg(target_os = "windows")]
@@ -610,7 +610,7 @@ fn try_open_browser(url: &str) -> Result<(), String> {
             .arg(url)
             .status()
             .map_err(|err| format!("Failed to launch browser via cmd /C start: {err}"))?;
-        return Ok(());
+        Ok(())
     }
 
     #[cfg(all(unix, not(target_os = "macos")))]
