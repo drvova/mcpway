@@ -501,22 +501,24 @@ fn escape_for_double_quotes(value: &str) -> String {
     value.replace('\\', "\\\\").replace('"', "\\\"")
 }
 
+#[cfg(unix)]
 fn make_executable(path: &Path) -> Result<(), String> {
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        let mut perms = fs::metadata(path)
-            .map_err(|err| format!("Failed to stat {}: {err}", path.display()))?
-            .permissions();
-        perms.set_mode(0o755);
-        fs::set_permissions(path, perms).map_err(|err| {
-            format!(
-                "Failed to set executable permissions on {}: {err}",
-                path.display()
-            )
-        })?;
-    }
+    use std::os::unix::fs::PermissionsExt;
+    let mut perms = fs::metadata(path)
+        .map_err(|err| format!("Failed to stat {}: {err}", path.display()))?
+        .permissions();
+    perms.set_mode(0o755);
+    fs::set_permissions(path, perms).map_err(|err| {
+        format!(
+            "Failed to set executable permissions on {}: {err}",
+            path.display()
+        )
+    })?;
+    Ok(())
+}
 
+#[cfg(not(unix))]
+fn make_executable(_path: &Path) -> Result<(), String> {
     Ok(())
 }
 
