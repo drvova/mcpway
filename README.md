@@ -14,6 +14,19 @@ cargo install mcpway
 
 Crates.io: <https://crates.io/crates/mcpway>
 
+## Supported Platforms
+
+`mcpway` is supported on:
+
+- Linux
+- macOS
+- Windows
+
+Platform notes:
+
+- OAuth browser launch uses platform-native open commands (`open` on macOS, `xdg-open` on Linux, `start` on Windows).
+- `connect --oauth-no-browser` is available when launching a browser is not possible in your environment.
+
 ## Quick Start
 
 ```bash
@@ -61,6 +74,24 @@ cargo metadata --no-deps
 cargo check -p mcpway
 cargo test -p mcpway
 cargo run -p mcpway -- --help
+```
+
+## Release Smoke Test (macOS)
+
+Run this on a macOS host before cutting a release:
+
+```bash
+cargo check -p mcpway
+cargo test -p mcpway
+
+# stdio -> stdio
+cargo run -p mcpway -- --stdio "./my-mcp-server --root ." --outputTransport stdio
+
+# stdio -> sse
+cargo run -p mcpway -- --stdio "./my-mcp-server --root ." --outputTransport sse --port 8000
+
+# oauth flow (verifies browser launch on macOS via `open`)
+cargo run -p mcpway -- connect https://example.com/mcp --oauth-login
 ```
 
 ## Command Reference
