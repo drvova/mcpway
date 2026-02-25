@@ -7,7 +7,7 @@ license = "MIT"
 repository = "https://github.com/drvova/mcpway"
 homepage = "https://github.com/drvova/mcpway"
 documentation = "https://docs.rs/mcpway"
-readme = "README.md"
+readme = "../README.md"
 keywords = ["mcp", "sse", "websocket", "streamable-http", "gateway"]
 categories = ["command-line-utilities", "network-programming"]
 
