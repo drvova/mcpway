@@ -73,3 +73,4 @@ mcpway connect --server github --registry ~/.mcpway/imported-mcp-registry.json
 
 - Repository: <https://github.com/drvova/mcpway>
 - Full usage guide: repository root `README.md`
+- Security policy: `SECURITY.md`

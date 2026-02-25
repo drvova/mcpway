@@ -1,6 +1,8 @@
+# mcpway
+
 ![MCPway](./mcpway-ascii-logo.svg)
 
-MCPway runs MCP stdio servers over SSE, WebSocket, and Streamable HTTP.
+`mcpway` runs MCP stdio servers over SSE, WebSocket, and Streamable HTTP.
 
 ## Install
 
@@ -26,7 +28,7 @@ cargo test -p mcpway
 cargo run -p mcpway -- --help
 ```
 
-## Commands & Shortcuts
+## Command Reference
 
 Shortcuts:
 - `-h` / `--help` is available everywhere.
@@ -63,7 +65,22 @@ Commands:
 ### `mcpway logs tail`
 `--file` `--lines` `--level` `--transport` `--json` `--no-follow`
 
-## Release (Public-Safe)
+For detailed command docs, run:
+
+```bash
+mcpway --help
+mcpway connect --help
+mcpway logs --help
+mcpway logs tail --help
+```
+
+## Public Repository Safety
+
+- Do not commit credentials, tokens, private keys, or production endpoints.
+- Use repository or organization secrets for CI publishing credentials.
+- Report vulnerabilities privately; see [SECURITY.md](./SECURITY.md).
+
+## Release Process
 
 1. Verify a clean tree and run checks from repo root:
 
