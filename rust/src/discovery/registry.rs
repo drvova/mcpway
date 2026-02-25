@@ -32,9 +32,7 @@ pub enum ResolvedImportedServer {
 
 pub fn default_registry_path() -> PathBuf {
     if let Some(home) = crate::discovery::user_home_dir() {
-        return home
-            .join(".mcpway")
-            .join("imported-mcp-registry.json");
+        return home.join(".mcpway").join("imported-mcp-registry.json");
     }
 
     PathBuf::from(".mcpway/imported-mcp-registry.json")

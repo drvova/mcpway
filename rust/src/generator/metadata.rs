@@ -134,9 +134,8 @@ mod tests {
                 mcpway_path: Some("/tmp/demo/bin/mcpway".to_string()),
                 env_example_path: "/tmp/demo/.env.example".to_string(),
             },
-            regenerate_command:
-                "mcpway regenerate --metadata /tmp/demo/mcpway-artifact.json"
-                    .to_string(),
+            regenerate_command: "mcpway regenerate --metadata /tmp/demo/mcpway-artifact.json"
+                .to_string(),
             connect: None,
         };
 

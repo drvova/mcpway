@@ -387,7 +387,8 @@ mod tests {
 
         let script = render_posix_launcher(&normalized);
         assert!(script.contains("ARGS+=(--env \"API_KEY=${API_KEY}\")"));
-        assert!(script
-            .contains("ARGS+=(--header \"Authorization: ${MCPWAY_HEADER_AUTHORIZATION}\")"));
+        assert!(
+            script.contains("ARGS+=(--header \"Authorization: ${MCPWAY_HEADER_AUTHORIZATION}\")")
+        );
     }
 }

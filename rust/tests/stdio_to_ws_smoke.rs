@@ -6,9 +6,7 @@ use futures::{SinkExt, StreamExt};
 use tokio_tungstenite::connect_async;
 use tokio_tungstenite::tungstenite::Message;
 
-use common::{
-    find_free_port, initialize_request, spawn_mcpway, stop_child, wait_for_http_status,
-};
+use common::{find_free_port, initialize_request, spawn_mcpway, stop_child, wait_for_http_status};
 
 #[tokio::test]
 async fn stdio_to_ws_roundtrip_smoke() {

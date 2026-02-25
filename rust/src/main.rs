@@ -64,7 +64,7 @@ async fn main() {
             }
         }
         CliCommand::Connect(config) => {
-            if let Err(err) = connect::run(config).await {
+            if let Err(err) = connect::run(*config).await {
                 eprintln!("[mcpway] Error: {err}");
                 std::process::exit(1);
             }
@@ -98,9 +98,7 @@ async fn run_gateway(config: Config) -> Result<(), String> {
         output_transport_label(config.output_transport),
     );
     tracing::info!("Starting...");
-    tracing::info!(
-        "mcpway gateway runtime initialized",
-    );
+    tracing::info!("mcpway gateway runtime initialized",);
     tracing::info!("  - outputTransport: {:?}", config.output_transport);
 
     let runtime_store = RuntimeArgsStore::new(RuntimeArgs {

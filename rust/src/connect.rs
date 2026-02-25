@@ -17,6 +17,8 @@ use crate::support::command_spec::parse_command_spec;
 use crate::support::telemetry::init_telemetry;
 use crate::types::RuntimeArgs;
 
+type StdioLaunchSpec = (String, String, Vec<String>, HashMap<String, String>);
+
 pub async fn run(config: ConnectConfig) -> Result<(), String> {
     if let Some(oauth_cfg) = config.oauth.as_ref() {
         if oauth_cfg.logout {
@@ -199,9 +201,7 @@ async fn run_connect_stdio_mode(config: ConnectConfig) -> Result<(), String> {
     run_stdio_mode(config.log_level, &name, command, args, env).await
 }
 
-fn resolve_connect_stdio_command(
-    config: &ConnectConfig,
-) -> Result<(String, String, Vec<String>, HashMap<String, String>), String> {
+fn resolve_connect_stdio_command(config: &ConnectConfig) -> Result<StdioLaunchSpec, String> {
     if let Some(cmd) = config.stdio_cmd.as_deref() {
         let spec = parse_command_spec(cmd)?;
         let mut args = spec.args;
@@ -244,7 +244,7 @@ fn resolve_connect_stdio_command(
 fn resolve_from_wrapper_json(
     wrapper_path: &Path,
     config: &ConnectConfig,
-) -> Result<(String, String, Vec<String>, HashMap<String, String>), String> {
+) -> Result<StdioLaunchSpec, String> {
     let body = std::fs::read_to_string(wrapper_path)
         .map_err(|err| format!("Failed to read wrapper {}: {err}", wrapper_path.display()))?;
     let value = serde_json::from_str::<serde_json::Value>(&body)

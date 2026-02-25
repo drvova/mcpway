@@ -67,14 +67,8 @@ pub fn run_generate(config: &GenerateConfig) -> Result<(), String> {
 
     write_metadata(&metadata_path, &metadata)?;
 
-    println!(
-        "[mcpway] Generated artifact: {}",
-        output_dir.display()
-    );
-    println!(
-        "[mcpway] Regenerate with: {}",
-        metadata.regenerate_command
-    );
+    println!("[mcpway] Generated artifact: {}", output_dir.display());
+    println!("[mcpway] Regenerate with: {}", metadata.regenerate_command);
 
     Ok(())
 }
@@ -90,10 +84,7 @@ pub fn save_connect_profile(
         "[mcpway] Saved connect profile: {}",
         spec.output_dir.display()
     );
-    println!(
-        "[mcpway] Regenerate with: {}",
-        metadata.regenerate_command
-    );
+    println!("[mcpway] Regenerate with: {}", metadata.regenerate_command);
 
     Ok(())
 }
@@ -109,10 +100,7 @@ pub fn run_regenerate(config: &RegenerateConfig) -> Result<(), String> {
             "[mcpway] Regenerated connect profile: {}",
             spec.output_dir.display()
         );
-        println!(
-            "[mcpway] Regenerate with: {}",
-            metadata.regenerate_command
-        );
+        println!("[mcpway] Regenerate with: {}", metadata.regenerate_command);
         return Ok(());
     }
 

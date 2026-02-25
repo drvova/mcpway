@@ -35,10 +35,7 @@ pub fn default_log_path() -> PathBuf {
         return PathBuf::from(path);
     }
     if let Some(home) = crate::discovery::user_home_dir() {
-        return home
-            .join(".mcpway")
-            .join("logs")
-            .join("mcpway.ndjson");
+        return home.join(".mcpway").join("logs").join("mcpway.ndjson");
     }
     PathBuf::from(".mcpway/logs/mcpway.ndjson")
 }

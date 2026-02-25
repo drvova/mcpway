@@ -2,9 +2,7 @@ mod common;
 
 use std::time::Duration;
 
-use common::{
-    find_free_port, initialize_request, spawn_mcpway, stop_child, wait_for_http_status,
-};
+use common::{find_free_port, initialize_request, spawn_mcpway, stop_child, wait_for_http_status};
 
 #[tokio::test]
 async fn stdio_to_streamable_http_stateless_smoke() {

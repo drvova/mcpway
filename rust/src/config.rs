@@ -216,7 +216,7 @@ pub enum CliCommand {
     Run(Box<Config>),
     Generate(GenerateConfig),
     Regenerate(RegenerateConfig),
-    Connect(ConnectConfig),
+    Connect(Box<ConnectConfig>),
     Discover(DiscoverConfig),
     Import(ImportConfig),
     Logs(LogsConfig),
@@ -259,7 +259,9 @@ fn parse_cli_command_from(raw_args: Vec<String>) -> Result<CliCommand, ConfigErr
     match raw_args.get(1).map(String::as_str) {
         Some("generate") => parse_generate_config_from(raw_args).map(CliCommand::Generate),
         Some("regenerate") => parse_regenerate_config_from(raw_args).map(CliCommand::Regenerate),
-        Some("connect") => parse_connect_config_from(raw_args).map(CliCommand::Connect),
+        Some("connect") => {
+            parse_connect_config_from(raw_args).map(|cfg| CliCommand::Connect(Box::new(cfg)))
+        }
         Some("discover") => parse_discover_config_from(raw_args).map(CliCommand::Discover),
         Some("import") => parse_import_config_from(raw_args).map(CliCommand::Import),
         Some("logs") => parse_logs_config_from(raw_args).map(CliCommand::Logs),
@@ -441,9 +443,7 @@ fn parse_generate_config_from(raw_args: Vec<String>) -> Result<GenerateConfig, C
     let out = PathBuf::from(required_arg(sub, "out")?);
     let server = sub.get_one::<String>("server").cloned();
     let artifact_name = sub.get_one::<String>("artifactName").cloned();
-    let mcpway_binary = sub
-        .get_one::<String>("mcpwayBinary")
-        .map(PathBuf::from);
+    let mcpway_binary = sub.get_one::<String>("mcpwayBinary").map(PathBuf::from);
 
     let bundle_mcpway = !sub.get_flag("noBundleMCPway");
     let compile_wrapper = !sub.get_flag("noCompileWrapper");
@@ -471,9 +471,7 @@ fn parse_regenerate_config_from(raw_args: Vec<String>) -> Result<RegenerateConfi
     let definition = sub.get_one::<String>("definition").map(PathBuf::from);
     let server = sub.get_one::<String>("server").cloned();
     let out = sub.get_one::<String>("out").map(PathBuf::from);
-    let mcpway_binary = sub
-        .get_one::<String>("mcpwayBinary")
-        .map(PathBuf::from);
+    let mcpway_binary = sub.get_one::<String>("mcpwayBinary").map(PathBuf::from);
 
     Ok(RegenerateConfig {
         metadata,
@@ -1223,8 +1221,7 @@ fn no_args_banner_text_with_style(use_ansi: bool) -> String {
     output.push_str(
         "  mcpway generate --definition ./servers.json --server myServer --out ./artifact\n",
     );
-    output
-        .push_str("  mcpway regenerate --metadata ./artifact/mcpway-artifact.json\n\n");
+    output.push_str("  mcpway regenerate --metadata ./artifact/mcpway-artifact.json\n\n");
     output.push_str(&format!("{}\n", maybe_bold("Ad-hoc Connect", use_ansi)));
     output.push_str("  mcpway connect https://example.com/mcp\n");
     output.push_str("  mcpway connect wss://example.com/ws --protocol ws\n\n");
@@ -1382,16 +1379,12 @@ mod tests {
         let stdio_cfg = parse(&["mcpway", "--stdio", "cat"]).expect("stdio parse failed");
         assert_eq!(stdio_cfg.output_transport, OutputTransport::Sse);
 
-        let sse_cfg = parse(&["mcpway", "--sse", "http://127.0.0.1:9000/sse"])
-            .expect("sse parse failed");
+        let sse_cfg =
+            parse(&["mcpway", "--sse", "http://127.0.0.1:9000/sse"]).expect("sse parse failed");
         assert_eq!(sse_cfg.output_transport, OutputTransport::Stdio);
 
-        let streamable_cfg = parse(&[
-            "mcpway",
-            "--streamableHttp",
-            "http://127.0.0.1:9000/mcp",
-        ])
-        .expect("streamable parse failed");
+        let streamable_cfg = parse(&["mcpway", "--streamableHttp", "http://127.0.0.1:9000/mcp"])
+            .expect("streamable parse failed");
         assert_eq!(streamable_cfg.output_transport, OutputTransport::Stdio);
     }
 
@@ -1448,14 +1441,8 @@ mod tests {
 
     #[test]
     fn parse_rejects_invalid_runtime_admin_port() {
-        let err = parse(&[
-            "mcpway",
-            "--stdio",
-            "cat",
-            "--runtimeAdminPort",
-            "70000",
-        ])
-        .expect_err("expected invalid runtime admin port");
+        let err = parse(&["mcpway", "--stdio", "cat", "--runtimeAdminPort", "70000"])
+            .expect_err("expected invalid runtime admin port");
         match err {
             ConfigError::InvalidRuntimePort(message) => {
                 assert!(message.contains("runtimeAdminPort must be in 1..=65535"));
@@ -1721,8 +1708,8 @@ mod tests {
 
     #[test]
     fn parse_import_subcommand_nodecode_source() {
-        let cmd = parse_cli(&["mcpway", "import", "--from", "nodecode"])
-            .expect("import parse failed");
+        let cmd =
+            parse_cli(&["mcpway", "import", "--from", "nodecode"]).expect("import parse failed");
         match cmd {
             CliCommand::Import(cfg) => {
                 assert_eq!(cfg.from, ImportSource::Nodecode);

@@ -204,10 +204,8 @@ mod tests {
 
     #[tokio::test]
     async fn warm_cache_persists_only_hashed_keys() {
-        let tmp_path = std::env::temp_dir().join(format!(
-            "mcpway-warm-cache-{}.json",
-            std::process::id()
-        ));
+        let tmp_path =
+            std::env::temp_dir().join(format!("mcpway-warm-cache-{}.json", std::process::id()));
         std::env::set_var("MCPWAY_WARM_CACHE_PATH", &tmp_path);
 
         let pool = TransportPool::new();
