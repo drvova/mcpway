@@ -25,7 +25,8 @@ use crate::discovery::{
     DiscoverOptions, DiscoveredServer, DiscoveredTransport, DiscoveryConflict, SourceKind,
 };
 use crate::gateways::{
-    sse_to_stdio, stdio_to_sse, stdio_to_streamable_http, stdio_to_ws, streamable_http_to_stdio,
+    sse_to_stdio, stdio_to_sse, stdio_to_stdio, stdio_to_streamable_http, stdio_to_ws,
+    streamable_http_to_stdio,
 };
 use crate::runtime::admin::spawn_admin_server;
 use crate::runtime::prompt::spawn_prompt;
@@ -170,7 +171,7 @@ async fn run_gateway(config: Config) -> Result<(), String> {
             OutputTransport::StreamableHttp => {
                 stdio_to_streamable_http::run(config, runtime_store, update_rx).await
             }
-            OutputTransport::Stdio => Err("stdio→stdio is not supported".to_string()),
+            OutputTransport::Stdio => stdio_to_stdio::run(config, runtime_store, update_rx).await,
         }
     } else if config.sse.is_some() {
         match config.output_transport {
