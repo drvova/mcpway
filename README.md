@@ -28,6 +28,7 @@ Commands:
 - `mcpway connect [ENDPOINT] [OPTIONS]`
 - `mcpway discover [OPTIONS]`
 - `mcpway import [OPTIONS]`
+- `mcpway logs <COMMAND>`
 - `mcpway logs tail [OPTIONS]`
 
 ### `mcpway [OPTIONS]`
