@@ -428,7 +428,10 @@ fn apply_request_headers(
         req = req.header(key, value);
     }
     if !has_accept {
-        req = req.header(reqwest::header::ACCEPT, "application/json, text/event-stream");
+        req = req.header(
+            reqwest::header::ACCEPT,
+            "application/json, text/event-stream",
+        );
     }
     req
 }
