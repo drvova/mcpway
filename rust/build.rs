@@ -3,6 +3,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let embedded_dist = manifest_dir.join("web-dist");
     let workspace_web = manifest_dir.join("../web");
     let workspace_dist = workspace_web.join("dist");
+    let out_dist = std::path::PathBuf::from(std::env::var("OUT_DIR")?).join("web-dist");
 
     let protoc_path = protoc_bin_vendored::protoc_bin_path()?;
     std::env::set_var("PROTOC", protoc_path);
@@ -32,16 +33,22 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         if !build.success() {
             return Err("npm run build failed while building web assets".into());
         }
-
-        sync_web_dist(&workspace_dist, &embedded_dist)?;
     }
 
-    if !embedded_dist.join("index.html").is_file() {
+    let source_dist = if workspace_dist.join("index.html").is_file() {
+        workspace_dist.as_path()
+    } else {
+        embedded_dist.as_path()
+    };
+
+    if !source_dist.join("index.html").is_file() {
         return Err(
-            "Missing embedded web assets at rust/web-dist. Build web assets and sync rust/web-dist before publishing."
+            "Missing embedded web assets. Expected web/dist or rust/web-dist with index.html."
                 .into(),
         );
     }
+
+    sync_web_dist(source_dist, &out_dist)?;
 
     Ok(())
 }
