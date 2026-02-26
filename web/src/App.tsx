@@ -3,6 +3,7 @@ import { BrandLogo } from "./ui/brand-logo";
 import { Button, Card, ScrollView, Select, TextField } from "./ui/primitives";
 import { detailsFromUnknown, detailsFromViteError, formatFatalError } from "./ui/surfaces/error-format";
 import { ErrorOverlay } from "./ui/surfaces/error-overlay";
+import { LogDetailOverlay } from "./ui/surfaces/log-detail-overlay";
 import { ErrorScreen } from "./ui/surfaces/error-screen";
 
 type LogRecord = {
@@ -127,6 +128,8 @@ export function App() {
     localStorage.getItem("mcpway:theme-id") ?? "mcpway-default"
   );
   const [search, setSearch] = createSignal("");
+  const [selectedLog, setSelectedLog] = createSignal<LogRecord | null>(null);
+  const [logsPaused, setLogsPaused] = createSignal(false);
   const [panelErrors, setPanelErrors] = createSignal<Partial<Record<PanelErrorKey, string>>>({});
   const [overlayError, setOverlayError] = createSignal<OverlayError | null>(null);
   const [fatalError, setFatalError] = createSignal<unknown | null>(null);
@@ -219,6 +222,14 @@ export function App() {
     setOverlayError(null);
   }
 
+  function openLogDetails(entry: LogRecord): void {
+    setSelectedLog(entry);
+  }
+
+  function closeLogDetails(): void {
+    setSelectedLog(null);
+  }
+
   async function copyFatalErrorDetails(): Promise<void> {
     const payload = fatalError();
     if (!payload) {
@@ -291,6 +302,19 @@ export function App() {
         overlay: false
       });
     }
+  }
+
+  function disconnectLogsSocket(): void {
+    if (!socket) {
+      return;
+    }
+
+    socket.onopen = null;
+    socket.onmessage = null;
+    socket.onclose = null;
+    socket.onerror = null;
+    socket.close();
+    socket = undefined;
   }
 
   async function loadRuntimePanels(): Promise<void> {
@@ -370,8 +394,12 @@ export function App() {
   }
 
   function connectLogsSocket(): void {
+    if (logsPaused()) {
+      return;
+    }
+
     if (socket) {
-      socket.close();
+      disconnectLogsSocket();
     }
 
     let connected = false;
@@ -425,9 +453,30 @@ export function App() {
   }
 
   function reconnect(): void {
+    if (!logsPaused()) {
+      void loadRecentLogs();
+      connectLogsSocket();
+    }
+    void loadRuntimePanels();
+  }
+
+  function pauseLogs(): void {
+    if (logsPaused()) {
+      return;
+    }
+    setLogsPaused(true);
+    disconnectLogsSocket();
+    setStatus("paused");
+    setPanelError("logs", undefined);
+  }
+
+  function resumeLogs(): void {
+    if (!logsPaused()) {
+      return;
+    }
+    setLogsPaused(false);
     void loadRecentLogs();
     connectLogsSocket();
-    void loadRuntimePanels();
   }
 
   function retryFromOverlay(): void {
@@ -490,7 +539,7 @@ export function App() {
 
     onCleanup(() => {
       window.clearInterval(refreshInterval);
-      socket?.close();
+      disconnectLogsSocket();
       window.removeEventListener("error", handleWindowError);
       window.removeEventListener("unhandledrejection", handleUnhandledRejection);
       hotModule?.off("vite:error", handleViteError);
@@ -578,7 +627,21 @@ export function App() {
               <section class="panel logs">
                 <div class="panel-header">
                   <h2>Logs</h2>
-                  <span class="meta">{filteredLogs().length} rows</span>
+                  <div class="panel-header-actions">
+                    <span class="meta">{filteredLogs().length} rows</span>
+                    <Show
+                      when={!logsPaused()}
+                      fallback={
+                        <Button type="button" size="small" variant="secondary" onClick={resumeLogs}>
+                          Resume
+                        </Button>
+                      }
+                    >
+                      <Button type="button" size="small" variant="ghost" onClick={pauseLogs}>
+                        Pause
+                      </Button>
+                    </Show>
+                  </div>
                 </div>
 
                 <Show when={panelErrors().logs}>
@@ -592,7 +655,19 @@ export function App() {
                 <ScrollView class="log-grid">
                   <For each={filteredLogs()}>
                     {(entry) => (
-                      <article class="log-row">
+                      <article
+                        class="log-row"
+                        role="button"
+                        tabIndex={0}
+                        aria-label={`Inspect log ${entry.level} ${entry.mode} ${entry.transport}`}
+                        onClick={() => openLogDetails(entry)}
+                        onKeyDown={(event) => {
+                          if (event.key === "Enter" || event.key === " ") {
+                            event.preventDefault();
+                            openLogDetails(entry);
+                          }
+                        }}
+                      >
                         <time class="log-time">{formatTimestamp(entry.ts_utc)}</time>
                         <strong class={`level level-${entry.level}`}>{entry.level}</strong>
                         <code class="log-source">
@@ -633,6 +708,7 @@ export function App() {
             </div>
           </main>
 
+          <LogDetailOverlay entry={selectedLog()} onDismiss={closeLogDetails} />
           <ErrorOverlay entry={overlayError()} onRetry={retryFromOverlay} onDismiss={dismissOverlay} />
         </div>
       }
