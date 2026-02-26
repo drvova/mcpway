@@ -1,4 +1,6 @@
+pub mod grpc_to_stdio;
 pub mod sse_to_stdio;
+pub mod stdio_to_grpc;
 pub mod stdio_to_sse;
 pub mod stdio_to_stdio;
 pub mod stdio_to_streamable_http;

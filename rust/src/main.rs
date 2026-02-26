@@ -3,6 +3,7 @@ mod connect;
 mod discovery;
 mod gateways;
 mod generator;
+mod grpc_proto;
 mod logs;
 mod oauth;
 mod runtime;
@@ -28,8 +29,8 @@ use crate::discovery::{
     DiscoverySearchOptions, DiscoverySortField, DiscoverySortOrder, SourceKind,
 };
 use crate::gateways::{
-    sse_to_stdio, stdio_to_sse, stdio_to_stdio, stdio_to_streamable_http, stdio_to_ws,
-    streamable_http_to_stdio,
+    sse_to_stdio, stdio_to_grpc, stdio_to_sse, stdio_to_stdio, stdio_to_streamable_http,
+    stdio_to_ws, streamable_http_to_stdio,
 };
 use crate::runtime::admin::{spawn_admin_server, AdminServerOptions};
 use crate::runtime::prompt::spawn_prompt;
@@ -180,19 +181,28 @@ async fn run_gateway(config: Config) -> Result<(), String> {
             OutputTransport::StreamableHttp => {
                 stdio_to_streamable_http::run(config, runtime_store, update_rx).await
             }
+            OutputTransport::Grpc => stdio_to_grpc::run(config, runtime_store, update_rx).await,
             OutputTransport::Stdio => stdio_to_stdio::run(config, runtime_store, update_rx).await,
         }
     } else if config.sse.is_some() {
         match config.output_transport {
             OutputTransport::Stdio => sse_to_stdio::run(config, runtime_store, update_rx).await,
-            _ => Err("sse→output transport not supported".to_string()),
+            OutputTransport::Sse
+            | OutputTransport::Ws
+            | OutputTransport::StreamableHttp
+            | OutputTransport::Grpc => Err("sse→output transport not supported".to_string()),
         }
     } else if config.streamable_http.is_some() {
         match config.output_transport {
             OutputTransport::Stdio => {
                 streamable_http_to_stdio::run(config, runtime_store, update_rx).await
             }
-            _ => Err("streamable-http→output transport not supported".to_string()),
+            OutputTransport::Sse
+            | OutputTransport::Ws
+            | OutputTransport::StreamableHttp
+            | OutputTransport::Grpc => {
+                Err("streamable-http→output transport not supported".to_string())
+            }
         }
     } else {
         Err("Invalid input transport".to_string())
@@ -326,6 +336,7 @@ fn discover_transport_to_discovered(transport: DiscoverTransport) -> DiscoveredT
         DiscoverTransport::Sse => DiscoveredTransport::Sse,
         DiscoverTransport::Ws => DiscoveredTransport::Ws,
         DiscoverTransport::StreamableHttp => DiscoveredTransport::StreamableHttp,
+        DiscoverTransport::Grpc => DiscoveredTransport::Grpc,
     }
 }
 
@@ -416,6 +427,7 @@ fn transport_label(transport: DiscoveredTransport) -> &'static str {
         DiscoveredTransport::Sse => "sse",
         DiscoveredTransport::Ws => "ws",
         DiscoveredTransport::StreamableHttp => "streamable-http",
+        DiscoveredTransport::Grpc => "grpc",
     }
 }
 
@@ -432,6 +444,7 @@ fn output_transport_label(output: OutputTransport) -> &'static str {
         OutputTransport::Sse => "sse",
         OutputTransport::Ws => "ws",
         OutputTransport::StreamableHttp => "streamable-http",
+        OutputTransport::Grpc => "grpc",
     }
 }
 
@@ -469,7 +482,8 @@ fn save_import_profiles(
             }
             DiscoveredTransport::Sse
             | DiscoveredTransport::Ws
-            | DiscoveredTransport::StreamableHttp => {
+            | DiscoveredTransport::StreamableHttp
+            | DiscoveredTransport::Grpc => {
                 save_remote_profile(server, &output_dir, &profile_name)?;
             }
         }
@@ -548,6 +562,7 @@ fn save_remote_profile(
         DiscoveredTransport::Sse => ConnectProtocol::Sse,
         DiscoveredTransport::Ws => ConnectProtocol::Ws,
         DiscoveredTransport::StreamableHttp => ConnectProtocol::StreamableHttp,
+        DiscoveredTransport::Grpc => ConnectProtocol::Grpc,
         DiscoveredTransport::Stdio => {
             return Err(format!(
                 "Server '{}' is stdio, expected remote transport",

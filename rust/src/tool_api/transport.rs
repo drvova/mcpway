@@ -6,12 +6,18 @@ use futures::{SinkExt, StreamExt};
 use reqwest::{RequestBuilder, Url};
 use serde_json::Value;
 use tokio::net::TcpStream;
-use tokio::sync::{oneshot, Mutex, RwLock};
+use tokio::sync::{mpsc, oneshot, Mutex, RwLock};
 use tokio::task::JoinHandle;
+use tokio_stream::wrappers::ReceiverStream;
 use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 use tokio_tungstenite::tungstenite::Message;
 use tokio_tungstenite::{connect_async, MaybeTlsStream, WebSocketStream};
+use tonic::metadata::{MetadataKey, MetadataValue};
+use tonic::transport::Endpoint;
+use tonic::Request;
 
+use crate::grpc_proto::bridge::mcp_bridge_client::McpBridgeClient;
+use crate::grpc_proto::bridge::Envelope;
 use crate::tool_api::error::ToolCallError;
 
 const DEFAULT_CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
@@ -26,6 +32,7 @@ pub enum Transport {
     StreamableHttp,
     Sse,
     Ws,
+    Grpc,
 }
 
 #[derive(Debug, Clone)]
@@ -51,6 +58,7 @@ pub(crate) enum TransportClient {
     StreamableHttp(StreamableHttpTransport),
     Sse(SseTransport),
     Ws(WsTransport),
+    Grpc(GrpcTransport),
 }
 
 impl TransportClient {
@@ -64,6 +72,7 @@ impl TransportClient {
             }
             Transport::Sse => Ok(Self::Sse(SseTransport::new(options)?)),
             Transport::Ws => Ok(Self::Ws(WsTransport::new(options))),
+            Transport::Grpc => Ok(Self::Grpc(GrpcTransport::new(options))),
         }
     }
 
@@ -72,6 +81,7 @@ impl TransportClient {
             Self::StreamableHttp(inner) => inner.send_request(request).await,
             Self::Sse(inner) => inner.send_request(request).await,
             Self::Ws(inner) => inner.send_request(request).await,
+            Self::Grpc(inner) => inner.send_request(request).await,
         }
     }
 
@@ -83,6 +93,7 @@ impl TransportClient {
             Self::StreamableHttp(inner) => inner.send_notification(notification).await,
             Self::Sse(inner) => inner.send_notification(notification).await,
             Self::Ws(inner) => inner.send_notification(notification).await,
+            Self::Grpc(inner) => inner.send_notification(notification).await,
         }
     }
 }
@@ -486,6 +497,151 @@ impl WsTransport {
     }
 }
 
+pub(crate) struct GrpcTransport {
+    endpoint: String,
+    headers: HashMap<String, String>,
+    connect_timeout: Duration,
+    request_timeout: Option<Duration>,
+    writer: Option<mpsc::Sender<Envelope>>,
+    pending: std::sync::Arc<Mutex<HashMap<String, oneshot::Sender<Value>>>>,
+    reader_task: Option<JoinHandle<()>>,
+    seq: u64,
+}
+
+impl GrpcTransport {
+    fn new(options: TransportOptions) -> Self {
+        Self {
+            endpoint: options.endpoint,
+            headers: options.headers,
+            connect_timeout: options.connect_timeout,
+            request_timeout: options.request_timeout,
+            writer: None,
+            pending: std::sync::Arc::new(Mutex::new(HashMap::new())),
+            reader_task: None,
+            seq: 0,
+        }
+    }
+
+    async fn send_request(&mut self, request: &Value) -> Result<Value, ToolCallError> {
+        self.ensure_connected().await?;
+        let request_id = id_key_from_envelope(request).ok_or_else(|| {
+            ToolCallError::Protocol("JSON-RPC request is missing an id".to_string())
+        })?;
+        let envelope = self.next_envelope(request.to_string());
+
+        let (tx, rx) = oneshot::channel();
+        self.pending.lock().await.insert(request_id.clone(), tx);
+
+        let writer = self.writer.as_mut().ok_or_else(|| {
+            ToolCallError::Transport("gRPC stream writer is not connected".to_string())
+        })?;
+        if writer.send(envelope).await.is_err() {
+            self.pending.lock().await.remove(&request_id);
+            return Err(ToolCallError::Transport(
+                "Failed to send gRPC message: stream is closed".to_string(),
+            ));
+        }
+
+        let timeout = self.request_timeout.unwrap_or(DEFAULT_REQUEST_TIMEOUT);
+        match tokio::time::timeout(timeout, rx).await {
+            Ok(Ok(payload)) => Ok(payload),
+            Ok(Err(_)) => Err(ToolCallError::Transport(
+                "gRPC stream disconnected while waiting for response".to_string(),
+            )),
+            Err(_) => {
+                self.pending.lock().await.remove(&request_id);
+                Err(ToolCallError::Transport(format!(
+                    "Timed out waiting for gRPC response after {}ms",
+                    timeout.as_millis()
+                )))
+            }
+        }
+    }
+
+    async fn send_notification(&mut self, notification: &Value) -> Result<(), ToolCallError> {
+        self.ensure_connected().await?;
+        let envelope = self.next_envelope(notification.to_string());
+        let writer = self.writer.as_mut().ok_or_else(|| {
+            ToolCallError::Transport("gRPC stream writer is not connected".to_string())
+        })?;
+        writer.send(envelope).await.map_err(|_| {
+            ToolCallError::Transport("Failed to send gRPC message: stream is closed".into())
+        })
+    }
+
+    async fn ensure_connected(&mut self) -> Result<(), ToolCallError> {
+        if self
+            .reader_task
+            .as_ref()
+            .map(|task| task.is_finished())
+            .unwrap_or(false)
+        {
+            self.writer = None;
+            self.reader_task = None;
+        }
+
+        if self.writer.is_some() {
+            return Ok(());
+        }
+
+        let normalized_endpoint = normalize_grpc_endpoint(&self.endpoint)?;
+        let channel = Endpoint::from_shared(normalized_endpoint.clone())
+            .map_err(|err| ToolCallError::InvalidEndpoint(err.to_string()))?
+            .connect_timeout(self.connect_timeout)
+            .connect()
+            .await
+            .map_err(|err| ToolCallError::Transport(format!("gRPC connection failed: {err}")))?;
+
+        let mut client = McpBridgeClient::new(channel);
+        let (tx, rx) = mpsc::channel::<Envelope>(256);
+        let mut request = Request::new(ReceiverStream::new(rx));
+        apply_grpc_headers(request.metadata_mut(), &self.headers)?;
+
+        let mut inbound = client
+            .stream(request)
+            .await
+            .map_err(|err| ToolCallError::Transport(format!("gRPC stream failed: {err}")))?
+            .into_inner();
+        let pending = self.pending.clone();
+        self.reader_task = Some(tokio::spawn(async move {
+            loop {
+                let payload = match inbound.message().await {
+                    Ok(Some(envelope)) => envelope,
+                    Ok(None) => break,
+                    Err(_) => break,
+                };
+
+                if payload.json_rpc.trim().is_empty() {
+                    continue;
+                }
+                let Ok(parsed) = serde_json::from_str::<Value>(&payload.json_rpc) else {
+                    continue;
+                };
+                let Some(id_key) = id_key_from_envelope(&parsed) else {
+                    continue;
+                };
+
+                if let Some(tx) = pending.lock().await.remove(&id_key) {
+                    let _ = tx.send(parsed);
+                }
+            }
+        }));
+
+        self.writer = Some(tx);
+        Ok(())
+    }
+
+    fn next_envelope(&mut self, json_rpc: String) -> Envelope {
+        self.seq = self.seq.saturating_add(1);
+        Envelope {
+            json_rpc,
+            metadata: self.headers.clone(),
+            session_id: String::new(),
+            seq: self.seq,
+        }
+    }
+}
+
 pub(crate) fn id_key_from_envelope(message: &Value) -> Option<String> {
     let id = message.get("id")?;
     Some(match id {
@@ -495,6 +651,43 @@ pub(crate) fn id_key_from_envelope(message: &Value) -> Option<String> {
         Value::Null => "null".to_string(),
         other => format!("j:{}", other),
     })
+}
+
+fn normalize_grpc_endpoint(endpoint: &str) -> Result<String, ToolCallError> {
+    if let Some(rest) = endpoint.strip_prefix("grpc://") {
+        return Ok(format!("http://{rest}"));
+    }
+    if let Some(rest) = endpoint.strip_prefix("grpcs://") {
+        return Ok(format!("https://{rest}"));
+    }
+
+    let url =
+        Url::parse(endpoint).map_err(|err| ToolCallError::InvalidEndpoint(err.to_string()))?;
+    match url.scheme() {
+        "http" | "https" => Ok(url.to_string()),
+        other => Err(ToolCallError::InvalidEndpoint(format!(
+            "Unsupported gRPC endpoint scheme '{other}'. Use grpc://, grpcs://, http://, or https://"
+        ))),
+    }
+}
+
+fn apply_grpc_headers(
+    metadata: &mut tonic::metadata::MetadataMap,
+    headers: &HashMap<String, String>,
+) -> Result<(), ToolCallError> {
+    for (key, value) in headers {
+        let lower = key.to_ascii_lowercase();
+        let name = MetadataKey::from_bytes(lower.as_bytes()).map_err(|err| {
+            ToolCallError::InvalidArguments(format!("Invalid gRPC metadata key '{key}': {err}"))
+        })?;
+        let value = MetadataValue::try_from(value.as_str()).map_err(|err| {
+            ToolCallError::InvalidArguments(format!(
+                "Invalid gRPC metadata value for '{key}': {err}"
+            ))
+        })?;
+        metadata.insert(name, value);
+    }
+    Ok(())
 }
 
 fn apply_headers(mut req: RequestBuilder, headers: &HashMap<String, String>) -> RequestBuilder {

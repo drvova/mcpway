@@ -4,7 +4,7 @@
 
 ![MCPway](https://raw.githubusercontent.com/drvova/mcpway/main/mcpway-ascii-logo.svg)
 
-`mcpway` runs MCP stdio servers over SSE, WebSocket, and Streamable HTTP.
+`mcpway` runs MCP stdio servers over SSE, WebSocket, Streamable HTTP, and gRPC.
 
 ## Install
 
@@ -51,6 +51,9 @@ mcpway --stdio "./my-mcp-server --root ." --output-transport ws --port 8000
 # stdio -> streamable-http
 mcpway --stdio "./my-mcp-server --root ." --output-transport streamable-http --port 8000
 
+# stdio -> grpc
+mcpway --stdio "./my-mcp-server --root ." --output-transport grpc --port 8000
+
 # sse -> stdio
 mcpway --sse https://example.com/sse
 
@@ -63,6 +66,7 @@ For endpoint-first usage, use `connect`:
 ```bash
 mcpway connect https://example.com/mcp
 mcpway connect wss://example.com/ws --protocol ws
+mcpway connect grpc://127.0.0.1:50051 --protocol grpc
 ```
 
 ## Cargo Workspace
@@ -89,6 +93,9 @@ cargo run -p mcpway -- --stdio "./my-mcp-server --root ." --output-transport std
 
 # stdio -> sse
 cargo run -p mcpway -- --stdio "./my-mcp-server --root ." --output-transport sse --port 8000
+
+# stdio -> grpc
+cargo run -p mcpway -- --stdio "./my-mcp-server --root ." --output-transport grpc --port 50051
 
 # oauth flow (verifies browser launch on macOS via `open`)
 cargo run -p mcpway -- connect https://example.com/mcp --oauth-login
