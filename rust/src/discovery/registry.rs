@@ -102,7 +102,8 @@ pub fn resolve_server(
         }
         DiscoveredTransport::Sse
         | DiscoveredTransport::Ws
-        | DiscoveredTransport::StreamableHttp => {
+        | DiscoveredTransport::StreamableHttp
+        | DiscoveredTransport::Grpc => {
             let endpoint = server
                 .url
                 .as_ref()
@@ -113,6 +114,7 @@ pub fn resolve_server(
                 DiscoveredTransport::Sse => ConnectProtocol::Sse,
                 DiscoveredTransport::Ws => ConnectProtocol::Ws,
                 DiscoveredTransport::StreamableHttp => ConnectProtocol::StreamableHttp,
+                DiscoveredTransport::Grpc => ConnectProtocol::Grpc,
                 DiscoveredTransport::Stdio => unreachable!(),
             };
 

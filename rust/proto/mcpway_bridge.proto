@@ -1,0 +1,22 @@
+syntax = "proto3";
+
+package mcpway.bridge.v1;
+
+service McpBridge {
+  rpc Stream(stream Envelope) returns (stream Envelope);
+  rpc Health(HealthRequest) returns (HealthResponse);
+}
+
+message Envelope {
+  string json_rpc = 1;
+  map<string, string> metadata = 2;
+  string session_id = 3;
+  uint64 seq = 4;
+}
+
+message HealthRequest {}
+
+message HealthResponse {
+  bool ok = 1;
+  string message = 2;
+}

@@ -9,7 +9,7 @@ use url::Url;
 
 use crate::config::{Config, ConnectConfig, ConnectProtocol, CorsConfig, OutputTransport};
 use crate::discovery::registry::{resolve_server, ResolvedImportedServer};
-use crate::gateways::{sse_to_stdio, streamable_http_to_stdio, ws_to_stdio};
+use crate::gateways::{grpc_to_stdio, sse_to_stdio, streamable_http_to_stdio, ws_to_stdio};
 use crate::generator;
 use crate::oauth;
 use crate::runtime::store::RuntimeArgsStore;
@@ -182,6 +182,15 @@ async fn run_remote_mode(
                 }
                 ConnectProtocol::Ws => {
                     ws_to_stdio::run(
+                        endpoint.clone(),
+                        config.protocol_version.clone(),
+                        runtime_store,
+                        update_rx,
+                    )
+                    .await
+                }
+                ConnectProtocol::Grpc => {
+                    grpc_to_stdio::run(
                         endpoint.clone(),
                         config.protocol_version.clone(),
                         runtime_store,
@@ -405,6 +414,7 @@ pub fn infer_protocol(endpoint: &str) -> Result<ConnectProtocol, String> {
 
     match url.scheme() {
         "ws" | "wss" => Ok(ConnectProtocol::Ws),
+        "grpc" | "grpcs" => Ok(ConnectProtocol::Grpc),
         "http" | "https" => {
             let has_sse_segment = url
                 .path_segments()
@@ -418,7 +428,7 @@ pub fn infer_protocol(endpoint: &str) -> Result<ConnectProtocol, String> {
             }
         }
         other => Err(format!(
-            "Unsupported endpoint scheme '{other}'. Use ws://, wss://, http://, or https://"
+            "Unsupported endpoint scheme '{other}'. Use ws://, wss://, http://, https://, grpc://, or grpcs://"
         )),
     }
 }
@@ -427,7 +437,7 @@ fn to_gateway_config(config: &ConnectConfig, endpoint: &str, protocol: ConnectPr
     let (sse, streamable_http) = match protocol {
         ConnectProtocol::Sse => (Some(endpoint.to_string()), None),
         ConnectProtocol::StreamableHttp => (None, Some(endpoint.to_string())),
-        ConnectProtocol::Ws => (None, None),
+        ConnectProtocol::Ws | ConnectProtocol::Grpc => (None, None),
     };
 
     Config {
@@ -493,6 +503,18 @@ mod tests {
         assert_eq!(
             infer_protocol("https://example.com/mcp?transport=sse").ok(),
             Some(ConnectProtocol::StreamableHttp)
+        );
+    }
+
+    #[test]
+    fn infer_protocol_uses_grpc_scheme() {
+        assert_eq!(
+            infer_protocol("grpc://example.com/mcp").ok(),
+            Some(ConnectProtocol::Grpc)
+        );
+        assert_eq!(
+            infer_protocol("grpcs://example.com/mcp").ok(),
+            Some(ConnectProtocol::Grpc)
         );
     }
 }

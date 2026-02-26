@@ -47,6 +47,7 @@ pub enum DiscoveredTransport {
     Sse,
     Ws,
     StreamableHttp,
+    Grpc,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -323,6 +324,7 @@ fn server_matches_query(server: &DiscoveredServer, query: &str) -> bool {
         DiscoveredTransport::Sse => "sse",
         DiscoveredTransport::Ws => "ws",
         DiscoveredTransport::StreamableHttp => "streamable-http",
+        DiscoveredTransport::Grpc => "grpc",
     };
     let scope = match server.scope {
         DiscoveryScope::Project => "project",
@@ -370,6 +372,7 @@ fn transport_priority(transport: DiscoveredTransport) -> u8 {
         DiscoveredTransport::Sse => 1,
         DiscoveredTransport::Ws => 2,
         DiscoveredTransport::StreamableHttp => 3,
+        DiscoveredTransport::Grpc => 4,
     }
 }
 

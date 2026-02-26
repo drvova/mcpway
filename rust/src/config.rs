@@ -13,6 +13,7 @@ pub enum OutputTransport {
     Sse,
     Ws,
     StreamableHttp,
+    Grpc,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
@@ -86,6 +87,7 @@ pub enum ConnectProtocol {
     Sse,
     Ws,
     StreamableHttp,
+    Grpc,
 }
 
 impl ConnectProtocol {
@@ -94,6 +96,7 @@ impl ConnectProtocol {
             Self::Sse => "sse",
             Self::Ws => "ws",
             Self::StreamableHttp => "streamable-http",
+            Self::Grpc => "grpc",
         }
     }
 }
@@ -148,6 +151,7 @@ pub enum DiscoverTransport {
     Sse,
     Ws,
     StreamableHttp,
+    Grpc,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
@@ -225,6 +229,7 @@ pub enum LogsTransport {
     Sse,
     Ws,
     StreamableHttp,
+    Grpc,
     Connect,
 }
 
@@ -235,6 +240,7 @@ impl LogsTransport {
             Self::Sse => "sse",
             Self::Ws => "ws",
             Self::StreamableHttp => "streamable-http",
+            Self::Grpc => "grpc",
             Self::Connect => "connect",
         }
     }
@@ -849,7 +855,7 @@ fn build_cli() -> Command {
             Arg::new("output-transport")
                 .long("output-transport")
                 .value_parser(clap::builder::EnumValueParser::<OutputTransport>::new())
-                .value_name("stdio|sse|ws|streamable-http"),
+                .value_name("stdio|sse|ws|streamable-http|grpc"),
         )
         .arg(Arg::new("port").long("port").value_name("PORT"))
         .arg(
@@ -1113,7 +1119,7 @@ fn build_connect_subcommand() -> Command {
         .arg(
             Arg::new("endpoint")
                 .value_name("ENDPOINT")
-                .help("Endpoint URL (ws/wss/http/https)"),
+                .help("Endpoint URL (ws/wss/http/https/grpc/grpcs)"),
         )
         .arg(
             Arg::new("server")
@@ -1159,7 +1165,7 @@ fn build_connect_subcommand() -> Command {
             Arg::new("protocol")
                 .long("protocol")
                 .value_parser(clap::builder::EnumValueParser::<ConnectProtocol>::new())
-                .value_name("sse|streamable-http|ws"),
+                .value_name("sse|streamable-http|ws|grpc"),
         )
         .arg(
             Arg::new("header")
@@ -1313,7 +1319,7 @@ fn build_discover_subcommand() -> Command {
             Arg::new("transport")
                 .long("transport")
                 .value_parser(clap::builder::EnumValueParser::<DiscoverTransport>::new())
-                .value_name("stdio|sse|ws|streamable-http"),
+                .value_name("stdio|sse|ws|streamable-http|grpc"),
         )
         .arg(
             Arg::new("scope")
@@ -1422,7 +1428,7 @@ fn build_logs_subcommand() -> Command {
                     Arg::new("transport")
                         .long("transport")
                         .value_parser(clap::builder::EnumValueParser::<LogsTransport>::new())
-                        .value_name("stdio|sse|ws|streamable-http|connect"),
+                        .value_name("stdio|sse|ws|streamable-http|grpc|connect"),
                 )
                 .arg(Arg::new("json").long("json").action(ArgAction::SetTrue))
                 .arg(
@@ -1478,7 +1484,8 @@ fn no_args_banner_text_with_style(use_ansi: bool) -> String {
     output.push_str("  mcpway regenerate --metadata ./artifact/mcpway-artifact.json\n\n");
     output.push_str(&format!("{}\n", maybe_bold("Ad-hoc Connect", use_ansi)));
     output.push_str("  mcpway connect https://example.com/mcp\n");
-    output.push_str("  mcpway connect wss://example.com/ws --protocol ws\n\n");
+    output.push_str("  mcpway connect wss://example.com/ws --protocol ws\n");
+    output.push_str("  mcpway connect grpcs://example.com/mcp --protocol grpc\n\n");
     output.push_str(&format!(
         "{}\n",
         maybe_bold("Zero-Config Discovery", use_ansi)
@@ -1656,6 +1663,13 @@ mod tests {
     }
 
     #[test]
+    fn parse_accepts_grpc_output_transport() {
+        let cfg = parse(&["mcpway", "--stdio", "cat", "--output-transport", "grpc"])
+            .expect("grpc should parse");
+        assert_eq!(cfg.output_transport, OutputTransport::Grpc);
+    }
+
+    #[test]
     fn output_transport_value_enum_rejects_invalid_variant() {
         assert_eq!(
             OutputTransport::from_str("streamable-http", true).ok(),
@@ -1818,6 +1832,26 @@ mod tests {
                 assert_eq!(cfg.headers.get("X-Test"), Some(&"abc".to_string()));
                 assert_eq!(cfg.save_profile_dir, Some(PathBuf::from("./profile")));
                 assert_eq!(cfg.profile_name, Some("my-conn".to_string()));
+            }
+            other => panic!("unexpected command: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parse_connect_subcommand_with_grpc_protocol() {
+        let cmd = parse_cli(&[
+            "mcpway",
+            "connect",
+            "grpc://example.com/mcp",
+            "--protocol",
+            "grpc",
+        ])
+        .expect("connect grpc parse failed");
+
+        match cmd {
+            CliCommand::Connect(cfg) => {
+                assert_eq!(cfg.endpoint, Some("grpc://example.com/mcp".to_string()));
+                assert_eq!(cfg.protocol, Some(ConnectProtocol::Grpc));
             }
             other => panic!("unexpected command: {other:?}"),
         }
