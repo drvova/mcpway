@@ -82,6 +82,10 @@
   color: var(--warn);
 }
 
+.status-paused {
+  color: color-mix(in oklab, var(--warn) 80%, white 20%);
+}
+
 .status-disconnected,
 .status-stream-error,
 .status-stream-parse-error,
@@ -204,6 +208,12 @@
   background: color-mix(in oklab, var(--surface-2) 90%, black 10%);
 }
 
+.panel-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
 .meta {
   color: color-mix(in oklab, var(--fg) 70%, transparent);
   text-transform: uppercase;
@@ -226,6 +236,7 @@
   padding: 9px 11px;
   border-bottom: 1px solid color-mix(in oklab, var(--line-soft) 68%, transparent);
   font-size: 0.8rem;
+  cursor: pointer;
 }
 
 .log-row:nth-child(odd) {
@@ -234,6 +245,12 @@
 
 .log-row:hover {
   background: color-mix(in oklab, var(--accent) 6%, var(--surface-2));
+}
+
+.log-row:focus-visible {
+  outline: 1px solid color-mix(in oklab, var(--accent) 80%, transparent);
+  outline-offset: -1px;
+  background: color-mix(in oklab, var(--accent) 9%, var(--surface-2));
 }
 
 .log-time {
