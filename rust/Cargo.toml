@@ -1,6 +1,6 @@
 [package]
 name = "mcpway"
-version = "0.1.6"
+version = "0.1.7"
 edition = "2021"
 description = "Run MCP stdio servers over SSE, WebSocket, Streamable HTTP, and gRPC transports."
 license = "MIT"
