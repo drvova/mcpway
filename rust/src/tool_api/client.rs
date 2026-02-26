@@ -118,7 +118,11 @@ impl ToolClient {
         self.call_tool(&metadata, args).await
     }
 
-    async fn call_tool(&self, metadata: &ToolMetadata, args: Value) -> Result<Value, ToolCallError> {
+    async fn call_tool(
+        &self,
+        metadata: &ToolMetadata,
+        args: Value,
+    ) -> Result<Value, ToolCallError> {
         let args_object = normalize_args_for_tool(metadata, args)?;
 
         let mut state = self.state.lock().await;
@@ -198,7 +202,11 @@ impl ClientState {
         Ok(())
     }
 
-    async fn send_jsonrpc_request(&mut self, method: &str, params: Value) -> Result<Value, ToolCallError> {
+    async fn send_jsonrpc_request(
+        &mut self,
+        method: &str,
+        params: Value,
+    ) -> Result<Value, ToolCallError> {
         let request = json!({
             "jsonrpc": "2.0",
             "id": self.next_request_id(),

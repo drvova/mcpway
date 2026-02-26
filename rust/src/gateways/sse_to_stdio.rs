@@ -169,15 +169,18 @@ pub async fn run(
         };
 
         let runtime_args = runtime_clone.get_effective(None).await;
+        let request_context = SseRequestContext {
+            http: &http,
+            endpoint: &endpoint,
+            headers: &runtime_args.headers,
+            pool: &pool,
+            pool_key: &request_key,
+        };
         if !initialized && !is_initialize_request(&message) {
             let init_id = auto_init_id();
             let init_message = create_initialize_request(&init_id, &protocol_version);
             let init_payload = send_request(
-                &http,
-                &endpoint,
-                &runtime_args.headers,
-                &pool,
-                &request_key,
+                &request_context,
                 &init_message,
                 retry_policy,
                 &mut circuit_breaker,
@@ -188,16 +191,9 @@ pub async fn run(
                 println!("{}", response);
                 continue;
             }
-            if let Err(err) = send_initialized_notification(
-                &http,
-                &endpoint,
-                &runtime_args.headers,
-                &pool,
-                &request_key,
-                retry_policy,
-                &mut circuit_breaker,
-            )
-            .await
+            if let Err(err) =
+                send_initialized_notification(&request_context, retry_policy, &mut circuit_breaker)
+                    .await
             {
                 tracing::error!("Failed to send initialized notification: {err}");
             } else {
@@ -206,11 +202,7 @@ pub async fn run(
         }
 
         let payload = send_request(
-            &http,
-            &endpoint,
-            &runtime_args.headers,
-            &pool,
-            &request_key,
+            &request_context,
             &message,
             retry_policy,
             &mut circuit_breaker,
@@ -218,16 +210,9 @@ pub async fn run(
         .await;
 
         if is_initialize_request(&message) && payload.get("error").is_none() && !initialized {
-            if let Err(err) = send_initialized_notification(
-                &http,
-                &endpoint,
-                &runtime_args.headers,
-                &pool,
-                &request_key,
-                retry_policy,
-                &mut circuit_breaker,
-            )
-            .await
+            if let Err(err) =
+                send_initialized_notification(&request_context, retry_policy, &mut circuit_breaker)
+                    .await
             {
                 tracing::error!("Failed to send initialized notification: {err}");
             } else {
@@ -309,23 +294,27 @@ fn create_initialized_notification() -> serde_json::Value {
     })
 }
 
+struct SseRequestContext<'a> {
+    http: &'a reqwest::Client,
+    endpoint: &'a Url,
+    headers: &'a HeadersMap,
+    pool: &'a Arc<TransportPool>,
+    pool_key: &'a str,
+}
+
 async fn send_request(
-    http: &reqwest::Client,
-    endpoint: &Url,
-    headers: &HeadersMap,
-    pool: &Arc<TransportPool>,
-    pool_key: &str,
+    context: &SseRequestContext<'_>,
     message: &serde_json::Value,
     retry_policy: RetryPolicy,
     circuit_breaker: &mut CircuitBreaker,
 ) -> serde_json::Value {
     match run_with_retry("sse-request", retry_policy, circuit_breaker, || async {
-        let mut req = http.post(endpoint.clone()).json(message);
-        for (k, v) in headers.iter() {
+        let mut req = context.http.post(context.endpoint.clone()).json(message);
+        for (k, v) in context.headers.iter() {
             req = req.header(k, v);
         }
         let resp = req.send().await.map_err(|err| err.to_string())?;
-        pool.mark_success(pool_key, "sse").await;
+        context.pool.mark_success(context.pool_key, "sse").await;
         parse_response_payload(resp).await
     })
     .await
@@ -336,11 +325,7 @@ async fn send_request(
 }
 
 async fn send_initialized_notification(
-    http: &reqwest::Client,
-    endpoint: &Url,
-    headers: &HeadersMap,
-    pool: &Arc<TransportPool>,
-    pool_key: &str,
+    context: &SseRequestContext<'_>,
     retry_policy: RetryPolicy,
     circuit_breaker: &mut CircuitBreaker,
 ) -> Result<(), String> {
@@ -350,12 +335,12 @@ async fn send_initialized_notification(
         circuit_breaker,
         || async {
             let message = create_initialized_notification();
-            let mut req = http.post(endpoint.clone()).json(&message);
-            for (k, v) in headers.iter() {
+            let mut req = context.http.post(context.endpoint.clone()).json(&message);
+            for (k, v) in context.headers.iter() {
                 req = req.header(k, v);
             }
             let response = req.send().await.map_err(|err| err.to_string())?;
-            pool.mark_success(pool_key, "sse").await;
+            context.pool.mark_success(context.pool_key, "sse").await;
             if response.status().is_success() {
                 Ok(())
             } else {

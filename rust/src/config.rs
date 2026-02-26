@@ -285,7 +285,10 @@ impl fmt::Display for ConfigError {
                 )
             }
             ConfigError::MultipleTransports => {
-                write!(f, "Specify only one of --stdio, --sse, or --streamable-http")
+                write!(
+                    f,
+                    "Specify only one of --stdio, --sse, or --streamable-http"
+                )
             }
             ConfigError::InvalidSessionTimeout(msg) => write!(f, "{msg}"),
             ConfigError::InvalidRuntimePort(msg) => write!(f, "{msg}"),
