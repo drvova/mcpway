@@ -10,6 +10,7 @@ use url::Url;
 use uuid::Uuid;
 
 use crate::config::{ConnectOauthConfig, OAuthFlow};
+use crate::support::browser_launch::{should_attempt_browser_launch, try_open_browser};
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 struct OAuthCacheStore {
@@ -263,10 +264,8 @@ async fn run_device_flow(
     );
     println!("[mcpway] Enter code: {}", payload.user_code);
 
-    if !config.no_browser {
-        if let Some(url) = payload.verification_uri_complete.as_deref() {
-            let _ = try_open_browser(url);
-        }
+    if let Some(url) = payload.verification_uri_complete.as_deref() {
+        maybe_open_browser(url, config.no_browser);
     }
 
     let mut interval = payload.interval.unwrap_or(5).max(1);
@@ -366,9 +365,7 @@ async fn run_auth_code_flow(
 
     println!("[mcpway] OAuth authorization required");
     println!("[mcpway] Open this URL: {}", auth_url.as_str());
-    if !config.no_browser {
-        let _ = try_open_browser(auth_url.as_str());
-    }
+    maybe_open_browser(auth_url.as_str(), config.no_browser);
 
     let (mut stream, _) = timeout(Duration::from_secs(300), listener.accept())
         .await
@@ -591,35 +588,18 @@ fn save_store(path: &Path, store: &OAuthCacheStore) -> Result<(), String> {
     })
 }
 
-fn try_open_browser(url: &str) -> Result<(), String> {
-    #[cfg(target_os = "macos")]
-    {
-        std::process::Command::new("open")
-            .arg(url)
-            .status()
-            .map_err(|err| format!("Failed to launch browser via open: {err}"))?;
-        Ok(())
+fn maybe_open_browser(url: &str, no_browser: bool) {
+    if no_browser {
+        return;
     }
 
-    #[cfg(target_os = "windows")]
-    {
-        std::process::Command::new("cmd")
-            .arg("/C")
-            .arg("start")
-            .arg("")
-            .arg(url)
-            .status()
-            .map_err(|err| format!("Failed to launch browser via cmd /C start: {err}"))?;
-        Ok(())
+    if !should_attempt_browser_launch() {
+        eprintln!("[mcpway] Skipping automatic browser launch: no graphical session detected");
+        return;
     }
 
-    #[cfg(all(unix, not(target_os = "macos")))]
-    {
-        std::process::Command::new("xdg-open")
-            .arg(url)
-            .status()
-            .map_err(|err| format!("Failed to launch browser via xdg-open: {err}"))?;
-        Ok(())
+    if let Err(err) = try_open_browser(url) {
+        eprintln!("[mcpway] Warning: failed to launch browser automatically: {err}");
     }
 }
 

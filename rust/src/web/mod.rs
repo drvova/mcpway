@@ -21,6 +21,7 @@ use tokio::sync::{broadcast, Mutex};
 
 use crate::config::{OutputTransport, WebConfig};
 use crate::discovery::user_home_dir;
+use crate::support::browser_launch::{should_attempt_browser_launch, try_open_browser};
 use crate::support::log_store::{default_log_path, ensure_log_file, parse_record, StoredLogRecord};
 use crate::support::telemetry::init_telemetry;
 
@@ -208,7 +209,7 @@ pub async fn run(config: WebConfig) -> Result<(), String> {
     let app = Router::new()
         .nest("/api", api_router)
         .route("/", get(static_index))
-        .route("/assets/*path", get(static_asset))
+        .route("/assets/{*path}", get(static_asset))
         .fallback(get(static_fallback))
         .with_state(state);
 
@@ -217,7 +218,11 @@ pub async fn run(config: WebConfig) -> Result<(), String> {
     tracing::info!("Using log file: {}", log_path.display());
 
     if !config.no_open_browser {
-        let _ = try_open_browser(&listen_url);
+        if should_attempt_browser_launch() {
+            let _ = try_open_browser(&listen_url);
+        } else {
+            tracing::info!("Skipping automatic browser launch: no graphical session detected");
+        }
     }
 
     let listener = tokio::net::TcpListener::bind(addr)
@@ -230,19 +235,12 @@ pub async fn run(config: WebConfig) -> Result<(), String> {
 
 fn default_theme_cache_path() -> PathBuf {
     if let Some(home) = user_home_dir() {
-        return home
-            .join(".mcpway")
-            .join("themes")
-            .join("catalog.json");
+        return home.join(".mcpway").join("themes").join("catalog.json");
     }
     PathBuf::from(".mcpway/themes/catalog.json")
 }
 
-async fn authorize_api(
-    State(state): State<AppState>,
-    req: Request,
-    next: Next,
-) -> Response {
+async fn authorize_api(State(state): State<AppState>, req: Request, next: Next) -> Response {
     let Some(expected) = state.auth_token.as_deref() else {
         return next.run(req).await;
     };
@@ -438,10 +436,18 @@ impl ThemeService {
         if !self.cache_file.exists() {
             return Ok(None);
         }
-        let raw = std::fs::read_to_string(&self.cache_file)
-            .map_err(|err| format!("Failed to read theme cache {}: {err}", self.cache_file.display()))?;
-        let parsed = serde_json::from_str::<ThemeCatalog>(&raw)
-            .map_err(|err| format!("Failed to parse theme cache {}: {err}", self.cache_file.display()))?;
+        let raw = std::fs::read_to_string(&self.cache_file).map_err(|err| {
+            format!(
+                "Failed to read theme cache {}: {err}",
+                self.cache_file.display()
+            )
+        })?;
+        let parsed = serde_json::from_str::<ThemeCatalog>(&raw).map_err(|err| {
+            format!(
+                "Failed to parse theme cache {}: {err}",
+                self.cache_file.display()
+            )
+        })?;
         Ok(Some(parsed))
     }
 
@@ -772,38 +778,6 @@ fn unix_timestamp_secs() -> u64 {
         .duration_since(UNIX_EPOCH)
         .map(|duration| duration.as_secs())
         .unwrap_or(0)
-}
-
-fn try_open_browser(url: &str) -> Result<(), String> {
-    #[cfg(target_os = "macos")]
-    {
-        std::process::Command::new("open")
-            .arg(url)
-            .status()
-            .map_err(|err| format!("Failed to launch browser via open: {err}"))?;
-        return Ok(());
-    }
-
-    #[cfg(target_os = "windows")]
-    {
-        std::process::Command::new("cmd")
-            .args(["/C", "start", "", url])
-            .status()
-            .map_err(|err| format!("Failed to launch browser via cmd /C start: {err}"))?;
-        return Ok(());
-    }
-
-    #[cfg(all(unix, not(target_os = "macos")))]
-    {
-        std::process::Command::new("xdg-open")
-            .arg(url)
-            .status()
-            .map_err(|err| format!("Failed to launch browser via xdg-open: {err}"))?;
-        return Ok(());
-    }
-
-    #[allow(unreachable_code)]
-    Err("Automatic browser open is unsupported on this platform".to_string())
 }
 
 #[cfg(test)]

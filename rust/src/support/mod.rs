@@ -1,3 +1,4 @@
+pub mod browser_launch;
 pub mod command_spec;
 pub mod cors;
 pub mod log_store;
