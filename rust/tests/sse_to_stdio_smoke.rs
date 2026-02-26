@@ -71,7 +71,7 @@ async fn sse_to_stdio_roundtrip_smoke() {
         &[
             "--sse",
             &format!("http://127.0.0.1:{mock_port}/sse"),
-            "--logLevel",
+            "--log-level",
             "none",
         ],
         true,

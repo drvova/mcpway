@@ -26,14 +26,6 @@ pub fn discover(
         &mut issues,
     );
 
-    let legacy_global_path = home.join(".codeium").join("mcp_config.json");
-    collect_from_path(
-        &legacy_global_path,
-        DiscoveryScope::Global,
-        &mut servers,
-        &mut issues,
-    );
-
     (servers, issues)
 }
 
@@ -82,9 +74,8 @@ fn collect_from_path(
         let env = json_string_map(server_obj.get("env"));
         let headers = json_string_map(server_obj.get("headers"));
         let url = server_obj
-            .get("serverUrl")
+            .get("url")
             .and_then(|v| v.as_str())
-            .or_else(|| server_obj.get("url").and_then(|v| v.as_str()))
             .map(|v| v.to_string());
         let explicit_type = server_obj.get("type").and_then(|v| v.as_str());
 

@@ -65,12 +65,7 @@ fn collect_from_path(
         }
     };
 
-    let servers_obj = root
-        .get("servers")
-        .and_then(|v| v.as_object())
-        .or_else(|| root.get("mcpServers").and_then(|v| v.as_object()));
-
-    let Some(servers_obj) = servers_obj else {
+    let Some(servers_obj) = root.get("servers").and_then(|v| v.as_object()) else {
         issues.push(source_issue(
             SourceKind::VsCode,
             path,
@@ -99,7 +94,6 @@ fn collect_from_path(
         let url = server_obj
             .get("url")
             .and_then(|v| v.as_str())
-            .or_else(|| server_obj.get("serverUrl").and_then(|v| v.as_str()))
             .map(|v| v.to_string());
         let explicit_type = server_obj.get("type").and_then(|v| v.as_str());
 

@@ -13,6 +13,9 @@ use crate::runtime::store::RuntimeArgsStore;
 use crate::runtime::{RuntimeApplyResult, RuntimeScope, RuntimeUpdateRequest};
 use crate::support::signals::install_signal_handlers;
 use crate::transport::pool::{global_pool, transport_fingerprint, TransportPool};
+use crate::transport::reliability::{
+    run_with_retry, CircuitBreaker, CircuitBreakerPolicy, RetryPolicy,
+};
 use crate::types::HeadersMap;
 
 const ENDPOINT_WAIT_TIMEOUT: Duration = Duration::from_secs(10);
@@ -130,6 +133,15 @@ pub async fn run(
             Some(HTTP_REQUEST_TIMEOUT),
         )
         .await?;
+    let retry_policy = RetryPolicy {
+        max_retries: config.retry_attempts,
+        base_delay: Duration::from_millis(config.retry_base_delay_ms),
+        max_delay: Duration::from_millis(config.retry_max_delay_ms),
+    };
+    let mut circuit_breaker = CircuitBreaker::new(CircuitBreakerPolicy {
+        failure_threshold: config.circuit_failure_threshold,
+        cooldown: Duration::from_millis(config.circuit_cooldown_ms),
+    });
     let mut initialized = false;
 
     while let Some(line) = lines.next().await {
@@ -167,6 +179,8 @@ pub async fn run(
                 &pool,
                 &request_key,
                 &init_message,
+                retry_policy,
+                &mut circuit_breaker,
             )
             .await;
             if init_payload.get("error").is_some() {
@@ -180,6 +194,8 @@ pub async fn run(
                 &runtime_args.headers,
                 &pool,
                 &request_key,
+                retry_policy,
+                &mut circuit_breaker,
             )
             .await
             {
@@ -196,6 +212,8 @@ pub async fn run(
             &pool,
             &request_key,
             &message,
+            retry_policy,
+            &mut circuit_breaker,
         )
         .await;
 
@@ -206,6 +224,8 @@ pub async fn run(
                 &runtime_args.headers,
                 &pool,
                 &request_key,
+                retry_policy,
+                &mut circuit_breaker,
             )
             .await
             {
@@ -296,20 +316,22 @@ async fn send_request(
     pool: &Arc<TransportPool>,
     pool_key: &str,
     message: &serde_json::Value,
+    retry_policy: RetryPolicy,
+    circuit_breaker: &mut CircuitBreaker,
 ) -> serde_json::Value {
-    let mut req = http.post(endpoint.clone()).json(message);
-    for (k, v) in headers.iter() {
-        req = req.header(k, v);
-    }
-    match req.send().await {
-        Ok(resp) => {
-            pool.mark_success(pool_key, "sse").await;
-            match parse_response_payload(resp).await {
-                Ok(payload) => payload,
-                Err(err) => error_payload(-32000, err),
-            }
+    match run_with_retry("sse-request", retry_policy, circuit_breaker, || async {
+        let mut req = http.post(endpoint.clone()).json(message);
+        for (k, v) in headers.iter() {
+            req = req.header(k, v);
         }
-        Err(err) => error_payload(-32000, err.to_string()),
+        let resp = req.send().await.map_err(|err| err.to_string())?;
+        pool.mark_success(pool_key, "sse").await;
+        parse_response_payload(resp).await
+    })
+    .await
+    {
+        Ok(payload) => payload,
+        Err(err) => error_payload(-32000, err),
     }
 }
 
@@ -319,22 +341,32 @@ async fn send_initialized_notification(
     headers: &HeadersMap,
     pool: &Arc<TransportPool>,
     pool_key: &str,
+    retry_policy: RetryPolicy,
+    circuit_breaker: &mut CircuitBreaker,
 ) -> Result<(), String> {
-    let message = create_initialized_notification();
-    let mut req = http.post(endpoint.clone()).json(&message);
-    for (k, v) in headers.iter() {
-        req = req.header(k, v);
-    }
-    let response = req.send().await.map_err(|err| err.to_string())?;
-    pool.mark_success(pool_key, "sse").await;
-    if response.status().is_success() {
-        Ok(())
-    } else {
-        Err(format!(
-            "Initialized notification failed with status {}",
-            response.status()
-        ))
-    }
+    run_with_retry(
+        "sse-initialized-notification",
+        retry_policy,
+        circuit_breaker,
+        || async {
+            let message = create_initialized_notification();
+            let mut req = http.post(endpoint.clone()).json(&message);
+            for (k, v) in headers.iter() {
+                req = req.header(k, v);
+            }
+            let response = req.send().await.map_err(|err| err.to_string())?;
+            pool.mark_success(pool_key, "sse").await;
+            if response.status().is_success() {
+                Ok(())
+            } else {
+                Err(format!(
+                    "Initialized notification failed with status {}",
+                    response.status()
+                ))
+            }
+        },
+    )
+    .await
 }
 
 async fn parse_response_payload(resp: reqwest::Response) -> Result<serde_json::Value, String> {

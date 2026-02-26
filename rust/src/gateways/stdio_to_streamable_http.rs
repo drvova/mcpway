@@ -92,7 +92,7 @@ pub async fn run(
     );
     tracing::info!("  - port: {}", config.port);
     tracing::info!("  - stdio: {}", stdio_cmd);
-    tracing::info!("  - streamableHttpPath: {}", config.streamable_http_path);
+    tracing::info!("  - streamable-http-path: {}", config.streamable_http_path);
     if config.stateful {
         tracing::info!(
             "  - Session timeout: {}",
@@ -282,7 +282,6 @@ async fn stateful_post(
 ) -> impl IntoResponse {
     let session_header = headers
         .get("Mcp-Session-Id")
-        .or_else(|| headers.get("mcp-session-id"))
         .and_then(|v| v.to_str().ok())
         .map(|v| v.to_string());
 
@@ -383,7 +382,6 @@ async fn stateful_post(
 async fn stateful_get(State(state): State<AppState>, headers: HeaderMap) -> impl IntoResponse {
     let session_id = headers
         .get("Mcp-Session-Id")
-        .or_else(|| headers.get("mcp-session-id"))
         .and_then(|v| v.to_str().ok())
         .map(|v| v.to_string());
 
@@ -430,7 +428,6 @@ async fn stateful_get(State(state): State<AppState>, headers: HeaderMap) -> impl
 async fn stateful_delete(State(state): State<AppState>, headers: HeaderMap) -> impl IntoResponse {
     let session_id = headers
         .get("Mcp-Session-Id")
-        .or_else(|| headers.get("mcp-session-id"))
         .and_then(|v| v.to_str().ok())
         .map(|v| v.to_string());
 

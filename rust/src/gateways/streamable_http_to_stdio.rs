@@ -12,6 +12,9 @@ use crate::runtime::store::RuntimeArgsStore;
 use crate::runtime::{RuntimeApplyResult, RuntimeScope, RuntimeUpdateRequest};
 use crate::support::signals::install_signal_handlers;
 use crate::transport::pool::{global_pool, transport_fingerprint, TransportPool};
+use crate::transport::reliability::{
+    run_with_retry, CircuitBreaker, CircuitBreakerPolicy, RetryPolicy,
+};
 use crate::types::HeadersMap;
 
 const HTTP_CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
@@ -25,8 +28,8 @@ pub async fn run(
     let streamable_http_url = config
         .streamable_http
         .clone()
-        .ok_or("streamableHttp url is required")?;
-    tracing::info!("  - streamableHttp: {streamable_http_url}");
+        .ok_or("streamable-http url is required")?;
+    tracing::info!("  - streamable-http: {streamable_http_url}");
     tracing::info!(
         "  - Headers: {}",
         serde_json::to_string(&config.headers).unwrap_or_else(|_| "(none)".into())
@@ -141,6 +144,15 @@ pub async fn run(
     });
 
     let mut lines = FramedRead::new(tokio::io::stdin(), LinesCodec::new());
+    let retry_policy = RetryPolicy {
+        max_retries: config.retry_attempts,
+        base_delay: Duration::from_millis(config.retry_base_delay_ms),
+        max_delay: Duration::from_millis(config.retry_max_delay_ms),
+    };
+    let mut circuit_breaker = CircuitBreaker::new(CircuitBreakerPolicy {
+        failure_threshold: config.circuit_failure_threshold,
+        cooldown: Duration::from_millis(config.circuit_cooldown_ms),
+    });
     let mut initialized = false;
 
     while let Some(line) = lines.next().await {
@@ -170,6 +182,8 @@ pub async fn run(
                 &pool,
                 &request_key,
                 &init_message,
+                retry_policy,
+                &mut circuit_breaker,
             )
             .await;
             if init_payload.get("error").is_some() {
@@ -184,6 +198,8 @@ pub async fn run(
                 &session_clone,
                 &pool,
                 &request_key,
+                retry_policy,
+                &mut circuit_breaker,
             )
             .await
             {
@@ -201,6 +217,8 @@ pub async fn run(
             &pool,
             &request_key,
             &message,
+            retry_policy,
+            &mut circuit_breaker,
         )
         .await;
 
@@ -212,6 +230,8 @@ pub async fn run(
                 &session_clone,
                 &pool,
                 &request_key,
+                retry_policy,
+                &mut circuit_breaker,
             )
             .await
             {
@@ -285,23 +305,30 @@ async fn send_request(
     pool: &Arc<TransportPool>,
     pool_key: &str,
     message: &serde_json::Value,
+    retry_policy: RetryPolicy,
+    circuit_breaker: &mut CircuitBreaker,
 ) -> serde_json::Value {
-    let mut req = apply_request_headers(http.post(url).json(message), headers);
-    if let Some(sid) = session_id.read().await.clone() {
-        req = req.header("mcp-session-id", sid);
-    }
-    match req.send().await {
-        Ok(resp) => {
+    match run_with_retry(
+        "streamable-http-request",
+        retry_policy,
+        circuit_breaker,
+        || async {
+            let mut req = apply_request_headers(http.post(url).json(message), headers);
+            if let Some(sid) = session_id.read().await.clone() {
+                req = req.header("Mcp-Session-Id", sid);
+            }
+            let resp = req.send().await.map_err(|err| err.to_string())?;
             pool.mark_success(pool_key, "streamable-http").await;
             if let Some(sid) = extract_session_id(resp.headers()) {
                 *session_id.write().await = Some(sid.to_string());
             }
-            match parse_response_payload(resp).await {
-                Ok(payload) => payload,
-                Err(err) => error_payload(-32000, err),
-            }
-        }
-        Err(err) => error_payload(-32000, err.to_string()),
+            parse_response_payload(resp).await
+        },
+    )
+    .await
+    {
+        Ok(payload) => payload,
+        Err(err) => error_payload(-32000, err),
     }
 }
 
@@ -312,25 +339,35 @@ async fn send_initialized_notification(
     session_id: &Arc<RwLock<Option<String>>>,
     pool: &Arc<TransportPool>,
     pool_key: &str,
+    retry_policy: RetryPolicy,
+    circuit_breaker: &mut CircuitBreaker,
 ) -> Result<(), String> {
-    let message = create_initialized_notification();
-    let mut req = apply_request_headers(http.post(url).json(&message), headers);
-    if let Some(sid) = session_id.read().await.clone() {
-        req = req.header("mcp-session-id", sid);
-    }
-    let response = req.send().await.map_err(|err| err.to_string())?;
-    pool.mark_success(pool_key, "streamable-http").await;
-    if let Some(sid) = extract_session_id(response.headers()) {
-        *session_id.write().await = Some(sid.to_string());
-    }
-    if response.status().is_success() {
-        Ok(())
-    } else {
-        Err(format!(
-            "Initialized notification failed with status {}",
-            response.status()
-        ))
-    }
+    run_with_retry(
+        "streamable-http-initialized-notification",
+        retry_policy,
+        circuit_breaker,
+        || async {
+            let message = create_initialized_notification();
+            let mut req = apply_request_headers(http.post(url).json(&message), headers);
+            if let Some(sid) = session_id.read().await.clone() {
+                req = req.header("Mcp-Session-Id", sid);
+            }
+            let response = req.send().await.map_err(|err| err.to_string())?;
+            pool.mark_success(pool_key, "streamable-http").await;
+            if let Some(sid) = extract_session_id(response.headers()) {
+                *session_id.write().await = Some(sid.to_string());
+            }
+            if response.status().is_success() {
+                Ok(())
+            } else {
+                Err(format!(
+                    "Initialized notification failed with status {}",
+                    response.status()
+                ))
+            }
+        },
+    )
+    .await
 }
 
 async fn parse_response_payload(resp: reqwest::Response) -> Result<serde_json::Value, String> {
@@ -438,8 +475,7 @@ fn apply_request_headers(
 
 fn extract_session_id(headers: &reqwest::header::HeaderMap) -> Option<String> {
     headers
-        .get("mcp-session-id")
-        .or_else(|| headers.get("Mcp-Session-Id"))
+        .get("Mcp-Session-Id")
         .and_then(|value| value.to_str().ok())
         .map(str::to_owned)
 }
@@ -502,7 +538,7 @@ mod tests {
     }
 
     #[test]
-    fn extracts_session_id_case_insensitive() {
+    fn extracts_session_id_from_canonical_header() {
         let mut headers = reqwest::header::HeaderMap::new();
         headers.insert(
             reqwest::header::HeaderName::from_static("mcp-session-id"),

@@ -13,18 +13,18 @@ async fn stateful_streamable_session_expires_after_timeout() {
         &[
             "--stdio",
             "cat",
-            "--outputTransport",
+            "--output-transport",
             "streamable-http",
             "--stateful",
-            "--sessionTimeout",
+            "--session-timeout",
             "200",
             "--port",
             &port_str,
-            "--streamableHttpPath",
+            "--streamable-http-path",
             "/mcp",
-            "--healthEndpoint",
+            "--health-endpoint",
             "/healthz",
-            "--logLevel",
+            "--log-level",
             "none",
         ],
         false,
@@ -62,7 +62,6 @@ async fn stateful_streamable_session_expires_after_timeout() {
     let session_id = initialize_response
         .headers()
         .get("Mcp-Session-Id")
-        .or_else(|| initialize_response.headers().get("mcp-session-id"))
         .and_then(|value| value.to_str().ok())
         .map(str::to_owned)
         .expect("missing Mcp-Session-Id header on initialize response");

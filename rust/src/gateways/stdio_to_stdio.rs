@@ -19,7 +19,7 @@ pub async fn run(
     let stdio_cmd = config.stdio.clone().ok_or("stdio command is required")?;
 
     tracing::info!("  - stdio: {}", stdio_cmd);
-    tracing::info!("  - outputTransport: stdio");
+    tracing::info!("  - output-transport: stdio");
 
     install_signal_handlers(None);
 

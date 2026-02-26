@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
+use std::time::Duration;
 
 use tokio::process::Command;
 use tokio::sync::mpsc;
@@ -15,6 +16,9 @@ use crate::runtime::store::RuntimeArgsStore;
 use crate::runtime::RuntimeUpdateRequest;
 use crate::support::command_spec::parse_command_spec;
 use crate::support::telemetry::init_telemetry;
+use crate::transport::reliability::{
+    run_with_retry, CircuitBreaker, CircuitBreakerPolicy, RetryPolicy,
+};
 use crate::types::RuntimeArgs;
 
 type StdioLaunchSpec = (String, String, Vec<String>, HashMap<String, String>);
@@ -132,33 +136,63 @@ async fn run_remote_mode(
     tracing::info!("Starting ad-hoc connect mode...");
     tracing::info!("  - endpoint: {endpoint}");
     tracing::info!("  - protocol: {}", protocol.as_str());
+    tracing::info!("  - retry-attempts: {}", config.retry_attempts);
+    tracing::info!(
+        "  - retryBackoff: {}..{}ms",
+        config.retry_base_delay_ms,
+        config.retry_max_delay_ms
+    );
+    tracing::info!(
+        "  - circuit: failures={} cooldown={}ms",
+        config.circuit_failure_threshold,
+        config.circuit_cooldown_ms
+    );
 
-    let runtime_store = RuntimeArgsStore::new(RuntimeArgs {
-        headers: config.headers.clone(),
-        ..Default::default()
+    let retry_policy = RetryPolicy {
+        max_retries: config.retry_attempts,
+        base_delay: Duration::from_millis(config.retry_base_delay_ms),
+        max_delay: Duration::from_millis(config.retry_max_delay_ms),
+    };
+    let mut circuit_breaker = CircuitBreaker::new(CircuitBreakerPolicy {
+        failure_threshold: config.circuit_failure_threshold,
+        cooldown: Duration::from_millis(config.circuit_cooldown_ms),
     });
-    let (_update_tx, update_rx) = mpsc::channel::<RuntimeUpdateRequest>(32);
 
-    match protocol {
-        ConnectProtocol::Sse => {
-            let gateway_config = to_gateway_config(&config, &endpoint, ConnectProtocol::Sse);
-            sse_to_stdio::run(gateway_config, runtime_store, update_rx).await
-        }
-        ConnectProtocol::StreamableHttp => {
-            let gateway_config =
-                to_gateway_config(&config, &endpoint, ConnectProtocol::StreamableHttp);
-            streamable_http_to_stdio::run(gateway_config, runtime_store, update_rx).await
-        }
-        ConnectProtocol::Ws => {
-            ws_to_stdio::run(
-                endpoint,
-                config.protocol_version.clone(),
-                runtime_store,
-                update_rx,
-            )
-            .await
-        }
-    }
+    run_with_retry(
+        "connect-remote",
+        retry_policy,
+        &mut circuit_breaker,
+        || async {
+            let runtime_store = RuntimeArgsStore::new(RuntimeArgs {
+                headers: config.headers.clone(),
+                ..Default::default()
+            });
+            let (_update_tx, update_rx) = mpsc::channel::<RuntimeUpdateRequest>(32);
+
+            match protocol {
+                ConnectProtocol::Sse => {
+                    let gateway_config =
+                        to_gateway_config(&config, &endpoint, ConnectProtocol::Sse);
+                    sse_to_stdio::run(gateway_config, runtime_store, update_rx).await
+                }
+                ConnectProtocol::StreamableHttp => {
+                    let gateway_config =
+                        to_gateway_config(&config, &endpoint, ConnectProtocol::StreamableHttp);
+                    streamable_http_to_stdio::run(gateway_config, runtime_store, update_rx).await
+                }
+                ConnectProtocol::Ws => {
+                    ws_to_stdio::run(
+                        endpoint.clone(),
+                        config.protocol_version.clone(),
+                        runtime_store,
+                        update_rx,
+                    )
+                    .await
+                }
+            }
+        },
+    )
+    .await
 }
 
 async fn run_stdio_mode(
@@ -253,10 +287,9 @@ fn resolve_from_wrapper_json(
     let command = value
         .pointer("/normalized/command")
         .and_then(|v| v.as_str())
-        .or_else(|| value.get("command").and_then(|v| v.as_str()))
         .ok_or_else(|| {
             format!(
-                "Wrapper {} missing command field (expected normalized.command or command)",
+                "Wrapper {} missing command field (expected normalized.command)",
                 wrapper_path.display()
             )
         })?
@@ -265,7 +298,6 @@ fn resolve_from_wrapper_json(
     let mut args = value
         .pointer("/normalized/args")
         .and_then(|v| v.as_array())
-        .or_else(|| value.get("args").and_then(|v| v.as_array()))
         .map(|arr| {
             arr.iter()
                 .filter_map(|val| val.as_str().map(|s| s.to_string()))
@@ -277,7 +309,6 @@ fn resolve_from_wrapper_json(
     let mut env = value
         .pointer("/normalized/env_template")
         .and_then(|v| v.as_object())
-        .or_else(|| value.get("env").and_then(|v| v.as_object()))
         .map(|obj| {
             obj.iter()
                 .map(|(key, raw)| {
@@ -327,9 +358,11 @@ fn save_stdio_wrapper(
     let payload = serde_json::json!({
         "schema_version": "1",
         "name": name,
-        "command": command,
-        "args": args,
-        "env": env,
+        "normalized": {
+            "command": command,
+            "args": args,
+            "env_template": env,
+        },
     });
     std::fs::write(
         &path,
@@ -377,11 +410,8 @@ pub fn infer_protocol(endpoint: &str) -> Result<ConnectProtocol, String> {
                 .path_segments()
                 .map(|mut segments| segments.any(|segment| segment.eq_ignore_ascii_case("sse")))
                 .unwrap_or(false);
-            let has_sse_query_hint = url.query_pairs().any(|(key, value)| {
-                key.eq_ignore_ascii_case("transport") && value.eq_ignore_ascii_case("sse")
-            });
 
-            if has_sse_segment || has_sse_query_hint {
+            if has_sse_segment {
                 Ok(ConnectProtocol::Sse)
             } else {
                 Ok(ConnectProtocol::StreamableHttp)
@@ -420,6 +450,13 @@ fn to_gateway_config(config: &ConnectConfig, endpoint: &str, protocol: ConnectPr
         protocol_version: config.protocol_version.clone(),
         runtime_prompt: false,
         runtime_admin_port: None,
+        runtime_admin_host: "127.0.0.1".to_string(),
+        runtime_admin_token: None,
+        retry_attempts: config.retry_attempts,
+        retry_base_delay_ms: config.retry_base_delay_ms,
+        retry_max_delay_ms: config.retry_max_delay_ms,
+        circuit_failure_threshold: config.circuit_failure_threshold,
+        circuit_cooldown_ms: config.circuit_cooldown_ms,
     }
 }
 
@@ -447,6 +484,14 @@ mod tests {
     fn infer_protocol_defaults_http_to_streamable() {
         assert_eq!(
             infer_protocol("https://example.com/mcp").ok(),
+            Some(ConnectProtocol::StreamableHttp)
+        );
+    }
+
+    #[test]
+    fn infer_protocol_ignores_transport_query_hint() {
+        assert_eq!(
+            infer_protocol("https://example.com/mcp?transport=sse").ok(),
             Some(ConnectProtocol::StreamableHttp)
         );
     }
