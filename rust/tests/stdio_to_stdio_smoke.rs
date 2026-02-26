@@ -12,9 +12,9 @@ async fn stdio_to_stdio_roundtrip_smoke() {
         &[
             "--stdio",
             "cat",
-            "--outputTransport",
+            "--output-transport",
             "stdio",
-            "--logLevel",
+            "--log-level",
             "none",
         ],
         true,
@@ -58,9 +58,9 @@ async fn stdio_to_stdio_logs_invalid_json_and_continues() {
         &[
             "--stdio",
             "cat",
-            "--outputTransport",
+            "--output-transport",
             "stdio",
-            "--logLevel",
+            "--log-level",
             "none",
         ],
         true,

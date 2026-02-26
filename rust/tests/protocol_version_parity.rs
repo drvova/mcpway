@@ -59,7 +59,6 @@ const SESSION_ID: &str = "protocol-session-1";
 fn session_header(headers: &HeaderMap) -> Option<String> {
     headers
         .get("Mcp-Session-Id")
-        .or_else(|| headers.get("mcp-session-id"))
         .and_then(|value| value.to_str().ok())
         .map(str::to_owned)
 }
@@ -158,7 +157,7 @@ async fn sse_to_stdio_preserves_client_protocol_version_on_initialize() {
         &[
             "--sse",
             &format!("http://127.0.0.1:{mock_port}/sse"),
-            "--logLevel",
+            "--log-level",
             "none",
         ],
         true,
@@ -238,9 +237,9 @@ async fn sse_to_stdio_auto_initialize_uses_configured_protocol_version() {
         &[
             "--sse",
             &format!("http://127.0.0.1:{mock_port}/sse"),
-            "--protocolVersion",
+            "--protocol-version",
             configured_protocol,
-            "--logLevel",
+            "--log-level",
             "none",
         ],
         true,
@@ -318,9 +317,9 @@ async fn streamable_http_to_stdio_preserves_client_protocol_version_on_initializ
 
     let mut child = spawn_mcpway(
         &[
-            "--streamableHttp",
+            "--streamable-http",
             &format!("http://127.0.0.1:{mock_port}/mcp"),
-            "--logLevel",
+            "--log-level",
             "none",
         ],
         true,
@@ -400,11 +399,11 @@ async fn streamable_http_to_stdio_auto_initialize_uses_configured_protocol_versi
     let configured_protocol = "2098-02-02";
     let mut child = spawn_mcpway(
         &[
-            "--streamableHttp",
+            "--streamable-http",
             &format!("http://127.0.0.1:{mock_port}/mcp"),
-            "--protocolVersion",
+            "--protocol-version",
             configured_protocol,
-            "--logLevel",
+            "--log-level",
             "none",
         ],
         true,

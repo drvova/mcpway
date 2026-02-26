@@ -15,16 +15,16 @@ async fn stdio_to_streamable_http_stateful_handles_many_inflight_requests() {
         &[
             "--stdio",
             "cat",
-            "--outputTransport",
+            "--output-transport",
             "streamable-http",
             "--stateful",
             "--port",
             &port_str,
-            "--streamableHttpPath",
+            "--streamable-http-path",
             "/mcp",
-            "--healthEndpoint",
+            "--health-endpoint",
             "/healthz",
-            "--logLevel",
+            "--log-level",
             "none",
         ],
         false,
@@ -54,7 +54,6 @@ async fn stdio_to_streamable_http_stateful_handles_many_inflight_requests() {
     let session_id = init_response
         .headers()
         .get("Mcp-Session-Id")
-        .or_else(|| init_response.headers().get("mcp-session-id"))
         .and_then(|value| value.to_str().ok())
         .map(str::to_owned)
         .expect("missing Mcp-Session-Id on initialize response");

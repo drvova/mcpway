@@ -20,7 +20,6 @@ const SESSION_ID: &str = "streamable-concurrency-session";
 fn session_header(headers: &HeaderMap) -> Option<String> {
     headers
         .get("Mcp-Session-Id")
-        .or_else(|| headers.get("mcp-session-id"))
         .and_then(|value| value.to_str().ok())
         .map(str::to_owned)
 }
@@ -91,9 +90,9 @@ async fn streamable_http_to_stdio_handles_request_burst() {
 
     let mut child = spawn_mcpway(
         &[
-            "--streamableHttp",
+            "--streamable-http",
             &format!("http://127.0.0.1:{mock_port}/mcp"),
-            "--logLevel",
+            "--log-level",
             "none",
         ],
         true,

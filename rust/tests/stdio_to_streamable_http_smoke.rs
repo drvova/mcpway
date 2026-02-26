@@ -13,15 +13,15 @@ async fn stdio_to_streamable_http_stateless_smoke() {
         &[
             "--stdio",
             "cat",
-            "--outputTransport",
+            "--output-transport",
             "streamable-http",
             "--port",
             &port_str,
-            "--streamableHttpPath",
+            "--streamable-http-path",
             "/mcp",
-            "--healthEndpoint",
+            "--health-endpoint",
             "/healthz",
-            "--logLevel",
+            "--log-level",
             "none",
         ],
         false,
@@ -88,16 +88,16 @@ async fn stdio_to_streamable_http_stateful_smoke() {
         &[
             "--stdio",
             "cat",
-            "--outputTransport",
+            "--output-transport",
             "streamable-http",
             "--stateful",
             "--port",
             &port_str,
-            "--streamableHttpPath",
+            "--streamable-http-path",
             "/mcp",
-            "--healthEndpoint",
+            "--health-endpoint",
             "/healthz",
-            "--logLevel",
+            "--log-level",
             "none",
         ],
         false,
@@ -126,7 +126,6 @@ async fn stdio_to_streamable_http_stateful_smoke() {
     let session_id = post_response
         .headers()
         .get("Mcp-Session-Id")
-        .or_else(|| post_response.headers().get("mcp-session-id"))
         .and_then(|value| value.to_str().ok())
         .map(str::to_owned)
         .expect("missing Mcp-Session-Id header on stateful initialize response");

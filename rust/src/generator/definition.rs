@@ -35,36 +35,32 @@ fn parse_definition_value(
         return Err("Definition JSON must be an object".to_string());
     };
 
-    if let Some(servers_val) = root_obj.get("mcpServers") {
-        let Some(servers_obj) = servers_val.as_object() else {
-            return Err("mcpServers must be an object".to_string());
-        };
-        if servers_obj.is_empty() {
-            return Err("mcpServers is empty".to_string());
-        }
-
-        let (server_name, server_value) = if let Some(requested) = requested_server {
-            let Some(server_value) = servers_obj.get(requested) else {
-                return Err(format!("Server key '{requested}' not found in mcpServers"));
-            };
-            (requested.to_string(), server_value)
-        } else if servers_obj.len() == 1 {
-            let (name, value) = servers_obj
-                .iter()
-                .next()
-                .ok_or_else(|| "mcpServers is empty".to_string())?;
-            (name.to_string(), value)
-        } else {
-            return Err(
-                "Definition has multiple mcpServers entries; pass --server <name>".to_string(),
-            );
-        };
-
-        return parse_server_object(server_name, server_value);
+    let Some(servers_val) = root_obj.get("mcpServers") else {
+        return Err("Definition must contain top-level 'mcpServers' object".to_string());
+    };
+    let Some(servers_obj) = servers_val.as_object() else {
+        return Err("mcpServers must be an object".to_string());
+    };
+    if servers_obj.is_empty() {
+        return Err("mcpServers is empty".to_string());
     }
 
-    let fallback_name = requested_server.unwrap_or("default").to_string();
-    parse_server_object(fallback_name, root)
+    let (server_name, server_value) = if let Some(requested) = requested_server {
+        let Some(server_value) = servers_obj.get(requested) else {
+            return Err(format!("Server key '{requested}' not found in mcpServers"));
+        };
+        (requested.to_string(), server_value)
+    } else if servers_obj.len() == 1 {
+        let (name, value) = servers_obj
+            .iter()
+            .next()
+            .ok_or_else(|| "mcpServers is empty".to_string())?;
+        (name.to_string(), value)
+    } else {
+        return Err("Definition has multiple mcpServers entries; pass --server <name>".to_string());
+    };
+
+    parse_server_object(server_name, server_value)
 }
 
 fn parse_server_object(
@@ -155,12 +151,29 @@ mod tests {
     use super::*;
 
     #[test]
-    fn parses_single_server_object() {
+    fn rejects_root_server_object_without_mcp_servers() {
         let root: Value = serde_json::json!({
             "command": "node",
             "args": ["server.js"],
             "env": {"API_KEY": "secret"},
             "headers": {"Authorization": "Bearer abc"}
+        });
+
+        let err = parse_definition_value(&root, None).expect_err("parse should fail");
+        assert!(err.contains("mcpServers"));
+    }
+
+    #[test]
+    fn parses_single_server_from_mcp_servers() {
+        let root: Value = serde_json::json!({
+            "mcpServers": {
+                "default": {
+                    "command": "node",
+                    "args": ["server.js"],
+                    "env": {"API_KEY": "secret"},
+                    "headers": {"Authorization": "Bearer abc"}
+                }
+            }
         });
 
         let parsed = parse_definition_value(&root, None).expect("parse should succeed");

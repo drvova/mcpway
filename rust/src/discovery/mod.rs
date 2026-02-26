@@ -1,6 +1,7 @@
 pub mod registry;
 pub mod sources;
 
+use std::cmp::Ordering;
 use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
 
@@ -104,6 +105,47 @@ pub struct DiscoverOptions {
     pub project_root: Option<PathBuf>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "kebab-case")]
+pub enum DiscoverySortField {
+    #[default]
+    Name,
+    Source,
+    Scope,
+    Transport,
+    OriginPath,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum DiscoverySortOrder {
+    #[default]
+    Asc,
+    Desc,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct DiscoverySearchOptions {
+    #[serde(default)]
+    pub query: Option<String>,
+    #[serde(default)]
+    pub transport: Option<DiscoveredTransport>,
+    #[serde(default)]
+    pub scope: Option<DiscoveryScope>,
+    #[serde(default)]
+    pub source: Option<SourceKind>,
+    #[serde(default)]
+    pub enabled_only: bool,
+    #[serde(default)]
+    pub sort_by: DiscoverySortField,
+    #[serde(default)]
+    pub sort_order: DiscoverySortOrder,
+    #[serde(default)]
+    pub offset: usize,
+    #[serde(default)]
+    pub limit: Option<usize>,
+}
+
 pub const SOURCE_PRIORITY: [SourceKind; 7] = [
     SourceKind::Cursor,
     SourceKind::Claude,
@@ -179,6 +221,66 @@ pub fn discover(options: &DiscoverOptions) -> Result<DiscoveryReport, String> {
     })
 }
 
+pub fn apply_search(report: &DiscoveryReport, options: &DiscoverySearchOptions) -> DiscoveryReport {
+    let query = options
+        .query
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(|value| value.to_ascii_lowercase());
+
+    let mut servers = report
+        .servers
+        .iter()
+        .filter(|server| {
+            if let Some(transport) = options.transport {
+                if server.transport != transport {
+                    return false;
+                }
+            }
+            if let Some(scope) = options.scope {
+                if server.scope != scope {
+                    return false;
+                }
+            }
+            if let Some(source) = options.source {
+                if server.source != source {
+                    return false;
+                }
+            }
+            if options.enabled_only && !server.enabled {
+                return false;
+            }
+            if let Some(query) = query.as_deref() {
+                if !server_matches_query(server, query) {
+                    return false;
+                }
+            }
+            true
+        })
+        .cloned()
+        .collect::<Vec<_>>();
+
+    servers.sort_by(|left, right| compare_servers(left, right, options.sort_by));
+    if options.sort_order == DiscoverySortOrder::Desc {
+        servers.reverse();
+    }
+
+    if options.offset > 0 {
+        servers = servers.into_iter().skip(options.offset).collect();
+    }
+    if let Some(limit) = options.limit {
+        servers.truncate(limit);
+    }
+
+    DiscoveryReport {
+        project_root: report.project_root.clone(),
+        servers,
+        conflicts: report.conflicts.clone(),
+        issues: report.issues.clone(),
+    }
+}
+
 fn collapse_source_scope_precedence(servers: Vec<DiscoveredServer>) -> Vec<DiscoveredServer> {
     let mut sorted = servers;
     sorted.sort_by(|a, b| {
@@ -201,6 +303,73 @@ fn scope_priority(scope: DiscoveryScope) -> u8 {
     match scope {
         DiscoveryScope::Project => 0,
         DiscoveryScope::Global => 1,
+    }
+}
+
+fn server_matches_query(server: &DiscoveredServer, query: &str) -> bool {
+    let command = server
+        .command
+        .as_deref()
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+    let url = server
+        .url
+        .as_deref()
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+    let source = server.source.as_str().to_ascii_lowercase();
+    let transport = match server.transport {
+        DiscoveredTransport::Stdio => "stdio",
+        DiscoveredTransport::Sse => "sse",
+        DiscoveredTransport::Ws => "ws",
+        DiscoveredTransport::StreamableHttp => "streamable-http",
+    };
+    let scope = match server.scope {
+        DiscoveryScope::Project => "project",
+        DiscoveryScope::Global => "global",
+    };
+
+    server.name.to_ascii_lowercase().contains(query)
+        || source.contains(query)
+        || scope.contains(query)
+        || transport.contains(query)
+        || server.origin_path.to_ascii_lowercase().contains(query)
+        || server.raw_format.to_ascii_lowercase().contains(query)
+        || command.contains(query)
+        || url.contains(query)
+}
+
+fn compare_servers(
+    left: &DiscoveredServer,
+    right: &DiscoveredServer,
+    sort_by: DiscoverySortField,
+) -> Ordering {
+    let primary = match sort_by {
+        DiscoverySortField::Name => left.name.cmp(&right.name),
+        DiscoverySortField::Source => left.source.as_str().cmp(right.source.as_str()),
+        DiscoverySortField::Scope => scope_priority(left.scope).cmp(&scope_priority(right.scope)),
+        DiscoverySortField::Transport => {
+            transport_priority(left.transport).cmp(&transport_priority(right.transport))
+        }
+        DiscoverySortField::OriginPath => left.origin_path.cmp(&right.origin_path),
+    };
+
+    if primary != Ordering::Equal {
+        return primary;
+    }
+
+    left.name
+        .cmp(&right.name)
+        .then_with(|| left.source.as_str().cmp(right.source.as_str()))
+        .then_with(|| left.origin_path.cmp(&right.origin_path))
+}
+
+fn transport_priority(transport: DiscoveredTransport) -> u8 {
+    match transport {
+        DiscoveredTransport::Stdio => 0,
+        DiscoveredTransport::Sse => 1,
+        DiscoveredTransport::Ws => 2,
+        DiscoveredTransport::StreamableHttp => 3,
     }
 }
 
@@ -276,5 +445,73 @@ mod tests {
         assert_eq!(collapsed.len(), 1);
         assert_eq!(collapsed[0].scope, DiscoveryScope::Project);
         assert_eq!(collapsed[0].origin_path, "/tmp/project");
+    }
+
+    #[test]
+    fn apply_search_filters_sorts_and_pages() {
+        let report = DiscoveryReport {
+            project_root: "/tmp/project".to_string(),
+            servers: vec![
+                DiscoveredServer {
+                    name: "alpha".to_string(),
+                    source: SourceKind::OpenCode,
+                    scope: DiscoveryScope::Project,
+                    origin_path: "/tmp/project/a".to_string(),
+                    transport: DiscoveredTransport::StreamableHttp,
+                    command: None,
+                    args: Vec::new(),
+                    url: Some("https://a.example/mcp".to_string()),
+                    headers: BTreeMap::new(),
+                    env: BTreeMap::new(),
+                    enabled: true,
+                    raw_format: "json".to_string(),
+                },
+                DiscoveredServer {
+                    name: "beta".to_string(),
+                    source: SourceKind::OpenCode,
+                    scope: DiscoveryScope::Global,
+                    origin_path: "/tmp/global/b".to_string(),
+                    transport: DiscoveredTransport::Stdio,
+                    command: Some("node".to_string()),
+                    args: Vec::new(),
+                    url: None,
+                    headers: BTreeMap::new(),
+                    env: BTreeMap::new(),
+                    enabled: false,
+                    raw_format: "json".to_string(),
+                },
+                DiscoveredServer {
+                    name: "gamma".to_string(),
+                    source: SourceKind::Cursor,
+                    scope: DiscoveryScope::Project,
+                    origin_path: "/tmp/project/g".to_string(),
+                    transport: DiscoveredTransport::StreamableHttp,
+                    command: None,
+                    args: Vec::new(),
+                    url: Some("https://g.example/mcp".to_string()),
+                    headers: BTreeMap::new(),
+                    env: BTreeMap::new(),
+                    enabled: true,
+                    raw_format: "json".to_string(),
+                },
+            ],
+            conflicts: Vec::new(),
+            issues: Vec::new(),
+        };
+
+        let options = DiscoverySearchOptions {
+            query: Some("example".to_string()),
+            transport: Some(DiscoveredTransport::StreamableHttp),
+            scope: Some(DiscoveryScope::Project),
+            source: None,
+            enabled_only: true,
+            sort_by: DiscoverySortField::Name,
+            sort_order: DiscoverySortOrder::Desc,
+            offset: 1,
+            limit: Some(1),
+        };
+        let filtered = apply_search(&report, &options);
+        assert_eq!(filtered.servers.len(), 1);
+        assert_eq!(filtered.servers[0].name, "alpha");
     }
 }

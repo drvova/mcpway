@@ -121,7 +121,7 @@ fn collect_from_path(
             );
         }
 
-        let env = json_string_map(server.get("environment").or_else(|| server.get("env")));
+        let env = json_string_map(server.get("environment"));
         let headers = json_string_map(server.get("headers"));
         let url = server
             .get("url")

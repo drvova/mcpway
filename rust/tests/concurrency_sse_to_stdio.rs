@@ -73,7 +73,7 @@ async fn sse_to_stdio_handles_request_burst() {
         &[
             "--sse",
             &format!("http://127.0.0.1:{mock_port}/sse"),
-            "--logLevel",
+            "--log-level",
             "none",
         ],
         true,
@@ -147,7 +147,7 @@ async fn sse_to_stdio_errors_when_endpoint_event_is_missing() {
         &[
             "--sse",
             &format!("http://127.0.0.1:{mock_port}/sse"),
-            "--logLevel",
+            "--log-level",
             "none",
         ],
         true,

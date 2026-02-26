@@ -93,7 +93,7 @@ async fn run_ws_roundtrip(binary_response: bool, request_id: &str) {
             &format!("ws://127.0.0.1:{port}/ws"),
             "--protocol",
             "ws",
-            "--logLevel",
+            "--log-level",
             "none",
         ],
         true,

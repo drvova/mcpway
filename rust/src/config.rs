@@ -12,7 +12,6 @@ pub enum OutputTransport {
     Stdio,
     Sse,
     Ws,
-    #[value(alias = "streamableHttp")]
     StreamableHttp,
 }
 
@@ -51,6 +50,13 @@ pub struct Config {
     pub protocol_version: String,
     pub runtime_prompt: bool,
     pub runtime_admin_port: Option<u16>,
+    pub runtime_admin_host: String,
+    pub runtime_admin_token: Option<String>,
+    pub retry_attempts: u32,
+    pub retry_base_delay_ms: u64,
+    pub retry_max_delay_ms: u64,
+    pub circuit_failure_threshold: u32,
+    pub circuit_cooldown_ms: u64,
 }
 
 #[derive(Debug, Clone)]
@@ -79,7 +85,6 @@ pub struct RegenerateConfig {
 pub enum ConnectProtocol {
     Sse,
     Ws,
-    #[value(alias = "streamableHttp")]
     StreamableHttp,
 }
 
@@ -96,7 +101,6 @@ impl ConnectProtocol {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
 pub enum OAuthFlow {
     Device,
-    #[value(alias = "auth-code")]
     AuthCode,
 }
 
@@ -131,6 +135,40 @@ pub struct ConnectConfig {
     pub log_level: LogLevel,
     pub protocol_version: String,
     pub oauth: Option<ConnectOauthConfig>,
+    pub retry_attempts: u32,
+    pub retry_base_delay_ms: u64,
+    pub retry_max_delay_ms: u64,
+    pub circuit_failure_threshold: u32,
+    pub circuit_cooldown_ms: u64,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+pub enum DiscoverTransport {
+    Stdio,
+    Sse,
+    Ws,
+    StreamableHttp,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+pub enum DiscoverScope {
+    Project,
+    Global,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+pub enum DiscoverSortBy {
+    Name,
+    Source,
+    Scope,
+    Transport,
+    OriginPath,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+pub enum SortOrder {
+    Asc,
+    Desc,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
@@ -142,7 +180,6 @@ pub enum ImportSource {
     Windsurf,
     Opencode,
     Nodecode,
-    #[value(alias = "vs-code")]
     Vscode,
 }
 
@@ -152,6 +189,14 @@ pub struct DiscoverConfig {
     pub project_root: Option<PathBuf>,
     pub print_json: bool,
     pub strict_conflicts: bool,
+    pub search: Option<String>,
+    pub transport: Option<DiscoverTransport>,
+    pub scope: Option<DiscoverScope>,
+    pub enabled_only: bool,
+    pub sort_by: DiscoverSortBy,
+    pub order: SortOrder,
+    pub offset: usize,
+    pub limit: Option<usize>,
 }
 
 #[derive(Debug, Clone)]
@@ -179,7 +224,6 @@ pub enum LogsTransport {
     Stdio,
     Sse,
     Ws,
-    #[value(alias = "streamable-http")]
     StreamableHttp,
     Connect,
 }
@@ -237,11 +281,11 @@ impl fmt::Display for ConfigError {
             ConfigError::MissingTransport => {
                 write!(
                     f,
-                    "You must specify one of --stdio, --sse, or --streamableHttp"
+                    "You must specify one of --stdio, --sse, or --streamable-http"
                 )
             }
             ConfigError::MultipleTransports => {
-                write!(f, "Specify only one of --stdio, --sse, or --streamableHttp")
+                write!(f, "Specify only one of --stdio, --sse, or --streamable-http")
             }
             ConfigError::InvalidSessionTimeout(msg) => write!(f, "{msg}"),
             ConfigError::InvalidRuntimePort(msg) => write!(f, "{msg}"),
@@ -282,7 +326,7 @@ fn parse_config_from(raw_args: Vec<String>) -> Result<Config, ConfigError> {
 
     let stdio = matches.get_one::<String>("stdio").cloned();
     let sse = matches.get_one::<String>("sse").cloned();
-    let streamable_http = matches.get_one::<String>("streamableHttp").cloned();
+    let streamable_http = matches.get_one::<String>("streamable-http").cloned();
 
     let active = [stdio.is_some(), sse.is_some(), streamable_http.is_some()]
         .iter()
@@ -296,12 +340,12 @@ fn parse_config_from(raw_args: Vec<String>) -> Result<Config, ConfigError> {
     }
 
     let output_transport = matches
-        .get_one::<OutputTransport>("outputTransport")
+        .get_one::<OutputTransport>("output-transport")
         .copied()
         .or(default_output)
         .ok_or_else(|| {
             ConfigError::InvalidArg(
-                "outputTransport must be specified or inferable from input transport".into(),
+                "output-transport must be specified or inferable from input transport".into(),
             )
         })?;
 
@@ -312,28 +356,28 @@ fn parse_config_from(raw_args: Vec<String>) -> Result<Config, ConfigError> {
         .and_then(|v| v.parse::<u16>().ok())
         .unwrap_or(8000);
     let base_url = matches
-        .get_one::<String>("baseUrl")
+        .get_one::<String>("base-url")
         .cloned()
         .unwrap_or_default();
     let sse_path = matches
-        .get_one::<String>("ssePath")
+        .get_one::<String>("sse-path")
         .cloned()
         .unwrap_or_else(|| "/sse".to_string());
     let message_path = matches
-        .get_one::<String>("messagePath")
+        .get_one::<String>("message-path")
         .cloned()
         .unwrap_or_else(|| "/message".to_string());
     let streamable_http_path = matches
-        .get_one::<String>("streamableHttpPath")
+        .get_one::<String>("streamable-http-path")
         .cloned()
         .unwrap_or_else(|| "/mcp".to_string());
     let log_level = matches
-        .get_one::<LogLevel>("logLevel")
+        .get_one::<LogLevel>("log-level")
         .copied()
         .unwrap_or(LogLevel::Info);
 
     let health_endpoints: Vec<String> = matches
-        .get_many::<String>("healthEndpoint")
+        .get_many::<String>("health-endpoint")
         .map(|vals| {
             vals.filter(|v| !v.is_empty())
                 .map(|v| v.to_string())
@@ -351,7 +395,7 @@ fn parse_config_from(raw_args: Vec<String>) -> Result<Config, ConfigError> {
         .map(|vals| vals.map(|v| v.to_string()).collect())
         .unwrap_or_default();
 
-    let oauth2_bearer = matches.get_one::<String>("oauth2Bearer").cloned();
+    let oauth2_bearer = matches.get_one::<String>("oauth2-bearer").cloned();
     let headers = parse_headers(&header_values, oauth2_bearer.as_deref())?;
     let env = parse_env_values(&env_values);
 
@@ -370,15 +414,15 @@ fn parse_config_from(raw_args: Vec<String>) -> Result<Config, ConfigError> {
     };
 
     let stateful = matches.get_flag("stateful");
-    let session_timeout = if let Some(raw) = matches.get_one::<String>("sessionTimeout") {
+    let session_timeout = if let Some(raw) = matches.get_one::<String>("session-timeout") {
         let val: i64 = raw.parse().map_err(|_| {
             ConfigError::InvalidSessionTimeout(format!(
-                "sessionTimeout must be a positive number, received: {raw}"
+                "session-timeout must be a positive number, received: {raw}"
             ))
         })?;
         if val <= 0 {
             return Err(ConfigError::InvalidSessionTimeout(format!(
-                "sessionTimeout must be a positive number, received: {raw}"
+                "session-timeout must be a positive number, received: {raw}"
             )));
         }
         Some(val as u64)
@@ -387,26 +431,57 @@ fn parse_config_from(raw_args: Vec<String>) -> Result<Config, ConfigError> {
     };
 
     let protocol_version = matches
-        .get_one::<String>("protocolVersion")
+        .get_one::<String>("protocol-version")
         .cloned()
         .unwrap_or_else(|| "2024-11-05".to_string());
 
-    let runtime_prompt = matches.get_flag("runtimePrompt");
-    let runtime_admin_port = if let Some(raw) = matches.get_one::<String>("runtimeAdminPort") {
+    let runtime_prompt = matches.get_flag("runtime-prompt");
+    let runtime_admin_port = if let Some(raw) = matches.get_one::<String>("runtime-admin-port") {
         let val: i64 = raw.parse().map_err(|_| {
             ConfigError::InvalidRuntimePort(format!(
-                "runtimeAdminPort must be a valid port, received: {raw}"
+                "runtime-admin-port must be a valid port, received: {raw}"
             ))
         })?;
         if val <= 0 || val > u16::MAX as i64 {
             return Err(ConfigError::InvalidRuntimePort(format!(
-                "runtimeAdminPort must be in 1..=65535, received: {raw}"
+                "runtime-admin-port must be in 1..=65535, received: {raw}"
             )));
         }
         Some(val as u16)
     } else {
         None
     };
+    let runtime_admin_host = matches
+        .get_one::<String>("runtime-admin-host")
+        .cloned()
+        .unwrap_or_else(|| "127.0.0.1".to_string());
+    let runtime_admin_token = matches
+        .get_one::<String>("runtime-admin-token")
+        .cloned()
+        .or_else(|| env::var("MCPWAY_RUNTIME_ADMIN_TOKEN").ok())
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty());
+
+    let retry_attempts = matches
+        .get_one::<u32>("retry-attempts")
+        .copied()
+        .unwrap_or(2);
+    let retry_base_delay_ms = matches
+        .get_one::<u64>("retry-base-delay-ms")
+        .copied()
+        .unwrap_or(250);
+    let retry_max_delay_ms = matches
+        .get_one::<u64>("retry-max-delay-ms")
+        .copied()
+        .unwrap_or(2_000);
+    let circuit_failure_threshold = matches
+        .get_one::<u32>("circuit-failure-threshold")
+        .copied()
+        .unwrap_or(3);
+    let circuit_cooldown_ms = matches
+        .get_one::<u64>("circuit-cooldown-ms")
+        .copied()
+        .unwrap_or(5_000);
 
     Ok(Config {
         stdio,
@@ -428,6 +503,13 @@ fn parse_config_from(raw_args: Vec<String>) -> Result<Config, ConfigError> {
         protocol_version,
         runtime_prompt,
         runtime_admin_port,
+        runtime_admin_host,
+        runtime_admin_token,
+        retry_attempts,
+        retry_base_delay_ms,
+        retry_max_delay_ms,
+        circuit_failure_threshold,
+        circuit_cooldown_ms,
     })
 }
 
@@ -442,11 +524,11 @@ fn parse_generate_config_from(raw_args: Vec<String>) -> Result<GenerateConfig, C
     let definition = PathBuf::from(required_arg(sub, "definition")?);
     let out = PathBuf::from(required_arg(sub, "out")?);
     let server = sub.get_one::<String>("server").cloned();
-    let artifact_name = sub.get_one::<String>("artifactName").cloned();
-    let mcpway_binary = sub.get_one::<String>("mcpwayBinary").map(PathBuf::from);
+    let artifact_name = sub.get_one::<String>("artifact-name").cloned();
+    let mcpway_binary = sub.get_one::<String>("mcpway-binary").map(PathBuf::from);
 
-    let bundle_mcpway = !sub.get_flag("noBundleMCPway");
-    let compile_wrapper = !sub.get_flag("noCompileWrapper");
+    let bundle_mcpway = !sub.get_flag("no-bundle-mcpway");
+    let compile_wrapper = !sub.get_flag("no-compile-wrapper");
 
     Ok(GenerateConfig {
         definition,
@@ -471,16 +553,16 @@ fn parse_regenerate_config_from(raw_args: Vec<String>) -> Result<RegenerateConfi
     let definition = sub.get_one::<String>("definition").map(PathBuf::from);
     let server = sub.get_one::<String>("server").cloned();
     let out = sub.get_one::<String>("out").map(PathBuf::from);
-    let mcpway_binary = sub.get_one::<String>("mcpwayBinary").map(PathBuf::from);
+    let mcpway_binary = sub.get_one::<String>("mcpway-binary").map(PathBuf::from);
 
     Ok(RegenerateConfig {
         metadata,
         definition,
         server,
         out,
-        bundle_mcpway: parse_optional_bool(sub, "bundleMCPway", "noBundleMCPway"),
+        bundle_mcpway: parse_optional_bool(sub, "bundle-mcpway", "no-bundle-mcpway"),
         mcpway_binary,
-        compile_wrapper: parse_optional_bool(sub, "compileWrapper", "noCompileWrapper"),
+        compile_wrapper: parse_optional_bool(sub, "compile-wrapper", "no-compile-wrapper"),
     })
 }
 
@@ -494,8 +576,8 @@ fn parse_connect_config_from(raw_args: Vec<String>) -> Result<ConnectConfig, Con
 
     let endpoint = sub.get_one::<String>("endpoint").cloned();
     let server = sub.get_one::<String>("server").cloned();
-    let stdio_cmd = sub.get_one::<String>("stdioCmd").cloned();
-    let stdio_wrapper = sub.get_one::<String>("stdioWrapper").map(PathBuf::from);
+    let stdio_cmd = sub.get_one::<String>("stdio-cmd").cloned();
+    let stdio_wrapper = sub.get_one::<String>("stdio-wrapper").map(PathBuf::from);
     let stdio_mode = stdio_cmd.is_some() || stdio_wrapper.is_some();
     let selected_modes = endpoint.is_some() as u8 + server.is_some() as u8 + stdio_mode as u8;
 
@@ -526,46 +608,63 @@ fn parse_connect_config_from(raw_args: Vec<String>) -> Result<ConnectConfig, Con
         .map(|vals| vals.map(|v| v.to_string()).collect())
         .unwrap_or_default();
     let stdio_arg_values: Vec<String> = sub
-        .get_many::<String>("stdioArg")
+        .get_many::<String>("stdio-arg")
         .map(|vals| vals.map(|v| v.to_string()).collect())
         .unwrap_or_default();
     let stdio_env_values: Vec<String> = sub
-        .get_many::<String>("stdioEnv")
+        .get_many::<String>("stdio-env")
         .map(|vals| vals.map(|v| v.to_string()).collect())
         .unwrap_or_default();
-    let oauth2_bearer = sub.get_one::<String>("oauth2Bearer").cloned();
+    let oauth2_bearer = sub.get_one::<String>("oauth2-bearer").cloned();
     let headers = parse_headers(&header_values, oauth2_bearer.as_deref())?;
     let stdio_env = parse_env_values(&stdio_env_values);
 
     let registry_path = sub.get_one::<String>("registry").map(PathBuf::from);
-    let save_profile_dir = sub.get_one::<String>("saveProfile").map(PathBuf::from);
-    let profile_name = sub.get_one::<String>("profileName").cloned();
-    let save_wrapper_dir = sub.get_one::<String>("saveWrapper").map(PathBuf::from);
+    let save_profile_dir = sub.get_one::<String>("save-profile").map(PathBuf::from);
+    let profile_name = sub.get_one::<String>("profile-name").cloned();
+    let save_wrapper_dir = sub.get_one::<String>("save-wrapper").map(PathBuf::from);
     let log_level = sub
-        .get_one::<LogLevel>("logLevel")
+        .get_one::<LogLevel>("log-level")
         .copied()
         .unwrap_or(LogLevel::Info);
     let protocol_version = sub
-        .get_one::<String>("protocolVersion")
+        .get_one::<String>("protocol-version")
         .cloned()
         .unwrap_or_else(|| "2024-11-05".to_string());
+    let retry_attempts = sub.get_one::<u32>("retry-attempts").copied().unwrap_or(2);
+    let retry_base_delay_ms = sub
+        .get_one::<u64>("retry-base-delay-ms")
+        .copied()
+        .unwrap_or(250);
+    let retry_max_delay_ms = sub
+        .get_one::<u64>("retry-max-delay-ms")
+        .copied()
+        .unwrap_or(2_000);
+    let circuit_failure_threshold = sub
+        .get_one::<u32>("circuit-failure-threshold")
+        .copied()
+        .unwrap_or(3);
+    let circuit_cooldown_ms = sub
+        .get_one::<u64>("circuit-cooldown-ms")
+        .copied()
+        .unwrap_or(5_000);
 
     let oauth_scopes: Vec<String> = sub
-        .get_many::<String>("oauthScope")
+        .get_many::<String>("oauth-scope")
         .map(|vals| vals.map(|v| v.to_string()).collect())
         .unwrap_or_default();
-    let oauth_profile = sub.get_one::<String>("oauthProfile").cloned();
-    let oauth_issuer = sub.get_one::<String>("oauthIssuer").cloned();
-    let oauth_client_id = sub.get_one::<String>("oauthClientId").cloned();
+    let oauth_profile = sub.get_one::<String>("oauth-profile").cloned();
+    let oauth_issuer = sub.get_one::<String>("oauth-issuer").cloned();
+    let oauth_client_id = sub.get_one::<String>("oauth-client-id").cloned();
     let oauth_flow = sub
-        .get_one::<OAuthFlow>("oauthFlow")
+        .get_one::<OAuthFlow>("oauth-flow")
         .copied()
         .unwrap_or(OAuthFlow::Device);
-    let oauth_no_browser = sub.get_flag("oauthNoBrowser");
-    let oauth_cache = sub.get_one::<String>("oauthCache").map(PathBuf::from);
-    let oauth_login = sub.get_flag("oauthLogin");
-    let oauth_logout = sub.get_flag("oauthLogout");
-    let oauth_audience = sub.get_one::<String>("oauthAudience").cloned();
+    let oauth_no_browser = sub.get_flag("oauth-no-browser");
+    let oauth_cache = sub.get_one::<String>("oauth-cache").map(PathBuf::from);
+    let oauth_login = sub.get_flag("oauth-login");
+    let oauth_logout = sub.get_flag("oauth-logout");
+    let oauth_audience = sub.get_one::<String>("oauth-audience").cloned();
     let oauth_requested = oauth_profile.is_some()
         || oauth_issuer.is_some()
         || oauth_client_id.is_some()
@@ -617,6 +716,11 @@ fn parse_connect_config_from(raw_args: Vec<String>) -> Result<ConnectConfig, Con
         log_level,
         protocol_version,
         oauth,
+        retry_attempts,
+        retry_base_delay_ms,
+        retry_max_delay_ms,
+        circuit_failure_threshold,
+        circuit_cooldown_ms,
     })
 }
 
@@ -632,15 +736,37 @@ fn parse_discover_config_from(raw_args: Vec<String>) -> Result<DiscoverConfig, C
         .get_one::<ImportSource>("from")
         .copied()
         .unwrap_or(ImportSource::Auto);
-    let project_root = sub.get_one::<String>("projectRoot").map(PathBuf::from);
-    let print_json = sub.get_flag("printJson");
-    let strict_conflicts = sub.get_flag("strictConflicts");
+    let project_root = sub.get_one::<String>("project-root").map(PathBuf::from);
+    let print_json = sub.get_flag("print-json");
+    let strict_conflicts = sub.get_flag("strict-conflicts");
+    let search = sub.get_one::<String>("search").cloned();
+    let transport = sub.get_one::<DiscoverTransport>("transport").copied();
+    let scope = sub.get_one::<DiscoverScope>("scope").copied();
+    let enabled_only = sub.get_flag("enabled-only");
+    let sort_by = sub
+        .get_one::<DiscoverSortBy>("sort")
+        .copied()
+        .unwrap_or(DiscoverSortBy::Name);
+    let order = sub
+        .get_one::<SortOrder>("order")
+        .copied()
+        .unwrap_or(SortOrder::Asc);
+    let offset = sub.get_one::<usize>("offset").copied().unwrap_or(0);
+    let limit = sub.get_one::<usize>("limit").copied();
 
     Ok(DiscoverConfig {
         from,
         project_root,
         print_json,
         strict_conflicts,
+        search,
+        transport,
+        scope,
+        enabled_only,
+        sort_by,
+        order,
+        offset,
+        limit,
     })
 }
 
@@ -656,13 +782,13 @@ fn parse_import_config_from(raw_args: Vec<String>) -> Result<ImportConfig, Confi
         .get_one::<ImportSource>("from")
         .copied()
         .unwrap_or(ImportSource::Auto);
-    let project_root = sub.get_one::<String>("projectRoot").map(PathBuf::from);
-    let print_json = sub.get_flag("printJson");
-    let strict_conflicts = sub.get_flag("strictConflicts");
+    let project_root = sub.get_one::<String>("project-root").map(PathBuf::from);
+    let print_json = sub.get_flag("print-json");
+    let strict_conflicts = sub.get_flag("strict-conflicts");
     let registry_path = sub.get_one::<String>("registry").map(PathBuf::from);
-    let save_profiles_dir = sub.get_one::<String>("saveProfiles").map(PathBuf::from);
-    let bundle_mcpway = sub.get_flag("bundleMCPway");
-    let compile_wrapper = sub.get_flag("compileWrapper");
+    let save_profiles_dir = sub.get_one::<String>("save-profiles").map(PathBuf::from);
+    let bundle_mcpway = sub.get_flag("bundle-mcpway");
+    let compile_wrapper = sub.get_flag("compile-wrapper");
 
     Ok(ImportConfig {
         from,
@@ -694,7 +820,7 @@ fn parse_logs_config_from(raw_args: Vec<String>) -> Result<LogsConfig, ConfigErr
     let level = tail.get_one::<LogsLevel>("level").copied();
     let transport = tail.get_one::<LogsTransport>("transport").copied();
     let json = tail.get_flag("json");
-    let no_follow = tail.get_flag("noFollow");
+    let no_follow = tail.get_flag("no-follow");
     let follow = !no_follow;
 
     Ok(LogsConfig::Tail(LogsTailConfig {
@@ -712,44 +838,44 @@ fn build_cli() -> Command {
         .arg(Arg::new("stdio").long("stdio").value_name("CMD"))
         .arg(Arg::new("sse").long("sse").value_name("URL"))
         .arg(
-            Arg::new("streamableHttp")
-                .long("streamableHttp")
+            Arg::new("streamable-http")
+                .long("streamable-http")
                 .value_name("URL"),
         )
         .arg(
-            Arg::new("outputTransport")
-                .long("outputTransport")
+            Arg::new("output-transport")
+                .long("output-transport")
                 .value_parser(clap::builder::EnumValueParser::<OutputTransport>::new())
-                .value_name("stdio|sse|ws|streamableHttp"),
+                .value_name("stdio|sse|ws|streamable-http"),
         )
         .arg(Arg::new("port").long("port").value_name("PORT"))
         .arg(
-            Arg::new("baseUrl")
-                .long("baseUrl")
+            Arg::new("base-url")
+                .long("base-url")
                 .value_name("URL")
                 .default_value(""),
         )
         .arg(
-            Arg::new("ssePath")
-                .long("ssePath")
+            Arg::new("sse-path")
+                .long("sse-path")
                 .value_name("PATH")
                 .default_value("/sse"),
         )
         .arg(
-            Arg::new("messagePath")
-                .long("messagePath")
+            Arg::new("message-path")
+                .long("message-path")
                 .value_name("PATH")
                 .default_value("/message"),
         )
         .arg(
-            Arg::new("streamableHttpPath")
-                .long("streamableHttpPath")
+            Arg::new("streamable-http-path")
+                .long("streamable-http-path")
                 .value_name("PATH")
                 .default_value("/mcp"),
         )
         .arg(
-            Arg::new("logLevel")
-                .long("logLevel")
+            Arg::new("log-level")
+                .long("log-level")
                 .value_parser(clap::builder::EnumValueParser::<LogLevel>::new())
                 .default_value("info"),
         )
@@ -761,11 +887,10 @@ fn build_cli() -> Command {
                 .value_name("ORIGIN"),
         )
         .arg(
-            Arg::new("healthEndpoint")
-                .long("healthEndpoint")
+            Arg::new("health-endpoint")
+                .long("health-endpoint")
                 .action(ArgAction::Append)
-                .value_name("PATH")
-                .default_value(""),
+                .value_name("PATH"),
         )
         .arg(
             Arg::new("header")
@@ -780,8 +905,8 @@ fn build_cli() -> Command {
                 .value_name("KEY=VALUE"),
         )
         .arg(
-            Arg::new("oauth2Bearer")
-                .long("oauth2Bearer")
+            Arg::new("oauth2-bearer")
+                .long("oauth2-bearer")
                 .value_name("TOKEN"),
         )
         .arg(
@@ -790,24 +915,70 @@ fn build_cli() -> Command {
                 .action(ArgAction::SetTrue),
         )
         .arg(
-            Arg::new("sessionTimeout")
-                .long("sessionTimeout")
+            Arg::new("session-timeout")
+                .long("session-timeout")
                 .value_name("MILLISECONDS"),
         )
         .arg(
-            Arg::new("protocolVersion")
-                .long("protocolVersion")
+            Arg::new("protocol-version")
+                .long("protocol-version")
                 .default_value("2024-11-05"),
         )
         .arg(
-            Arg::new("runtimePrompt")
-                .long("runtimePrompt")
+            Arg::new("runtime-prompt")
+                .long("runtime-prompt")
                 .action(ArgAction::SetTrue),
         )
         .arg(
-            Arg::new("runtimeAdminPort")
-                .long("runtimeAdminPort")
+            Arg::new("runtime-admin-port")
+                .long("runtime-admin-port")
                 .value_name("PORT"),
+        )
+        .arg(
+            Arg::new("runtime-admin-host")
+                .long("runtime-admin-host")
+                .value_name("HOST")
+                .default_value("127.0.0.1"),
+        )
+        .arg(
+            Arg::new("runtime-admin-token")
+                .long("runtime-admin-token")
+                .value_name("TOKEN"),
+        )
+        .arg(
+            Arg::new("retry-attempts")
+                .long("retry-attempts")
+                .value_parser(clap::value_parser!(u32))
+                .value_name("N")
+                .default_value("2"),
+        )
+        .arg(
+            Arg::new("retry-base-delay-ms")
+                .long("retry-base-delay-ms")
+                .value_parser(clap::value_parser!(u64).range(1..))
+                .value_name("MILLISECONDS")
+                .default_value("250"),
+        )
+        .arg(
+            Arg::new("retry-max-delay-ms")
+                .long("retry-max-delay-ms")
+                .value_parser(clap::value_parser!(u64).range(1..))
+                .value_name("MILLISECONDS")
+                .default_value("2000"),
+        )
+        .arg(
+            Arg::new("circuit-failure-threshold")
+                .long("circuit-failure-threshold")
+                .value_parser(clap::value_parser!(u32).range(1..))
+                .value_name("N")
+                .default_value("3"),
+        )
+        .arg(
+            Arg::new("circuit-cooldown-ms")
+                .long("circuit-cooldown-ms")
+                .value_parser(clap::value_parser!(u64).range(1..))
+                .value_name("MILLISECONDS")
+                .default_value("5000"),
         )
 }
 
@@ -859,34 +1030,34 @@ fn build_generate_subcommand() -> Command {
         .arg(Arg::new("server").long("server").value_name("NAME"))
         .arg(Arg::new("out").long("out").required(true).value_name("DIR"))
         .arg(
-            Arg::new("artifactName")
+            Arg::new("artifact-name")
                 .long("artifact-name")
                 .value_name("NAME"),
         )
         .arg(
-            Arg::new("bundleMCPway")
+            Arg::new("bundle-mcpway")
                 .long("bundle-mcpway")
                 .action(ArgAction::SetTrue)
-                .conflicts_with("noBundleMCPway"),
+                .conflicts_with("no-bundle-mcpway"),
         )
         .arg(
-            Arg::new("noBundleMCPway")
+            Arg::new("no-bundle-mcpway")
                 .long("no-bundle-mcpway")
                 .action(ArgAction::SetTrue),
         )
         .arg(
-            Arg::new("mcpwayBinary")
+            Arg::new("mcpway-binary")
                 .long("mcpway-binary")
                 .value_name("PATH"),
         )
         .arg(
-            Arg::new("compileWrapper")
+            Arg::new("compile-wrapper")
                 .long("compile-wrapper")
                 .action(ArgAction::SetTrue)
-                .conflicts_with("noCompileWrapper"),
+                .conflicts_with("no-compile-wrapper"),
         )
         .arg(
-            Arg::new("noCompileWrapper")
+            Arg::new("no-compile-wrapper")
                 .long("no-compile-wrapper")
                 .action(ArgAction::SetTrue),
         )
@@ -905,29 +1076,29 @@ fn build_regenerate_subcommand() -> Command {
         .arg(Arg::new("server").long("server").value_name("NAME"))
         .arg(Arg::new("out").long("out").value_name("DIR"))
         .arg(
-            Arg::new("bundleMCPway")
+            Arg::new("bundle-mcpway")
                 .long("bundle-mcpway")
                 .action(ArgAction::SetTrue)
-                .conflicts_with("noBundleMCPway"),
+                .conflicts_with("no-bundle-mcpway"),
         )
         .arg(
-            Arg::new("noBundleMCPway")
+            Arg::new("no-bundle-mcpway")
                 .long("no-bundle-mcpway")
                 .action(ArgAction::SetTrue),
         )
         .arg(
-            Arg::new("mcpwayBinary")
+            Arg::new("mcpway-binary")
                 .long("mcpway-binary")
                 .value_name("PATH"),
         )
         .arg(
-            Arg::new("compileWrapper")
+            Arg::new("compile-wrapper")
                 .long("compile-wrapper")
                 .action(ArgAction::SetTrue)
-                .conflicts_with("noCompileWrapper"),
+                .conflicts_with("no-compile-wrapper"),
         )
         .arg(
-            Arg::new("noCompileWrapper")
+            Arg::new("no-compile-wrapper")
                 .long("no-compile-wrapper")
                 .action(ArgAction::SetTrue),
         )
@@ -949,13 +1120,13 @@ fn build_connect_subcommand() -> Command {
                 .help("Imported server name from registry"),
         )
         .arg(
-            Arg::new("stdioCmd")
+            Arg::new("stdio-cmd")
                 .long("stdio-cmd")
                 .value_name("CMD")
                 .help("Run an ad-hoc stdio command from connect mode"),
         )
         .arg(
-            Arg::new("stdioArg")
+            Arg::new("stdio-arg")
                 .long("stdio-arg")
                 .action(ArgAction::Append)
                 .allow_hyphen_values(true)
@@ -963,20 +1134,20 @@ fn build_connect_subcommand() -> Command {
                 .help("Additional stdio argument (repeatable)"),
         )
         .arg(
-            Arg::new("stdioEnv")
+            Arg::new("stdio-env")
                 .long("stdio-env")
                 .action(ArgAction::Append)
                 .value_name("KEY=VALUE")
                 .help("Additional stdio env var (repeatable)"),
         )
         .arg(
-            Arg::new("stdioWrapper")
+            Arg::new("stdio-wrapper")
                 .long("stdio-wrapper")
                 .value_name("PATH")
                 .help("Load stdio command/args/env from wrapper metadata path"),
         )
         .arg(
-            Arg::new("saveWrapper")
+            Arg::new("save-wrapper")
                 .long("save-wrapper")
                 .value_name("DIR")
                 .help("Persist resolved stdio wrapper config to a directory"),
@@ -994,83 +1165,118 @@ fn build_connect_subcommand() -> Command {
                 .value_name("HEADER"),
         )
         .arg(
-            Arg::new("oauth2Bearer")
-                .long("oauth2Bearer")
+            Arg::new("oauth2-bearer")
+                .long("oauth2-bearer")
                 .value_name("TOKEN"),
         )
         .arg(
-            Arg::new("oauthProfile")
+            Arg::new("oauth-profile")
                 .long("oauth-profile")
                 .value_name("NAME"),
         )
         .arg(
-            Arg::new("oauthIssuer")
+            Arg::new("oauth-issuer")
                 .long("oauth-issuer")
                 .value_name("URL"),
         )
         .arg(
-            Arg::new("oauthClientId")
+            Arg::new("oauth-client-id")
                 .long("oauth-client-id")
                 .value_name("ID"),
         )
         .arg(
-            Arg::new("oauthScope")
+            Arg::new("oauth-scope")
                 .long("oauth-scope")
                 .action(ArgAction::Append)
                 .value_name("SCOPE"),
         )
         .arg(
-            Arg::new("oauthFlow")
+            Arg::new("oauth-flow")
                 .long("oauth-flow")
                 .value_parser(clap::builder::EnumValueParser::<OAuthFlow>::new())
                 .default_value("device")
                 .value_name("device|auth-code"),
         )
         .arg(
-            Arg::new("oauthNoBrowser")
+            Arg::new("oauth-no-browser")
                 .long("oauth-no-browser")
                 .action(ArgAction::SetTrue),
         )
         .arg(
-            Arg::new("oauthCache")
+            Arg::new("oauth-cache")
                 .long("oauth-cache")
                 .value_name("PATH"),
         )
         .arg(
-            Arg::new("oauthLogin")
+            Arg::new("oauth-login")
                 .long("oauth-login")
                 .action(ArgAction::SetTrue),
         )
         .arg(
-            Arg::new("oauthLogout")
+            Arg::new("oauth-logout")
                 .long("oauth-logout")
                 .action(ArgAction::SetTrue),
         )
         .arg(
-            Arg::new("oauthAudience")
+            Arg::new("oauth-audience")
                 .long("oauth-audience")
                 .value_name("AUDIENCE"),
         )
         .arg(
-            Arg::new("saveProfile")
+            Arg::new("save-profile")
                 .long("save-profile")
                 .value_name("DIR"),
         )
         .arg(Arg::new("registry").long("registry").value_name("PATH"))
         .arg(
-            Arg::new("profileName")
+            Arg::new("profile-name")
                 .long("profile-name")
                 .value_name("NAME"),
         )
         .arg(
-            Arg::new("logLevel")
-                .long("logLevel")
+            Arg::new("retry-attempts")
+                .long("retry-attempts")
+                .value_parser(clap::value_parser!(u32))
+                .value_name("N")
+                .default_value("2"),
+        )
+        .arg(
+            Arg::new("retry-base-delay-ms")
+                .long("retry-base-delay-ms")
+                .value_parser(clap::value_parser!(u64).range(1..))
+                .value_name("MILLISECONDS")
+                .default_value("250"),
+        )
+        .arg(
+            Arg::new("retry-max-delay-ms")
+                .long("retry-max-delay-ms")
+                .value_parser(clap::value_parser!(u64).range(1..))
+                .value_name("MILLISECONDS")
+                .default_value("2000"),
+        )
+        .arg(
+            Arg::new("circuit-failure-threshold")
+                .long("circuit-failure-threshold")
+                .value_parser(clap::value_parser!(u32).range(1..))
+                .value_name("N")
+                .default_value("3"),
+        )
+        .arg(
+            Arg::new("circuit-cooldown-ms")
+                .long("circuit-cooldown-ms")
+                .value_parser(clap::value_parser!(u64).range(1..))
+                .value_name("MILLISECONDS")
+                .default_value("5000"),
+        )
+        .arg(
+            Arg::new("log-level")
+                .long("log-level")
                 .value_parser(clap::builder::EnumValueParser::<LogLevel>::new())
                 .default_value("info"),
         )
         .arg(
-            Arg::new("protocolVersion")
-                .long("protocolVersion")
+            Arg::new("protocol-version")
+                .long("protocol-version")
                 .default_value("2024-11-05"),
         )
 }
@@ -1085,19 +1291,64 @@ fn build_discover_subcommand() -> Command {
                 .value_name("auto|cursor|claude|codex|windsurf|opencode|nodecode|vscode"),
         )
         .arg(
-            Arg::new("projectRoot")
+            Arg::new("project-root")
                 .long("project-root")
                 .value_name("DIR"),
         )
         .arg(
-            Arg::new("printJson")
+            Arg::new("print-json")
                 .long("json")
                 .action(ArgAction::SetTrue),
         )
         .arg(
-            Arg::new("strictConflicts")
+            Arg::new("strict-conflicts")
                 .long("strict-conflicts")
                 .action(ArgAction::SetTrue),
+        )
+        .arg(Arg::new("search").long("search").value_name("QUERY"))
+        .arg(
+            Arg::new("transport")
+                .long("transport")
+                .value_parser(clap::builder::EnumValueParser::<DiscoverTransport>::new())
+                .value_name("stdio|sse|ws|streamable-http"),
+        )
+        .arg(
+            Arg::new("scope")
+                .long("scope")
+                .value_parser(clap::builder::EnumValueParser::<DiscoverScope>::new())
+                .value_name("project|global"),
+        )
+        .arg(
+            Arg::new("enabled-only")
+                .long("enabled-only")
+                .action(ArgAction::SetTrue),
+        )
+        .arg(
+            Arg::new("sort")
+                .long("sort")
+                .value_parser(clap::builder::EnumValueParser::<DiscoverSortBy>::new())
+                .value_name("name|source|scope|transport|origin-path")
+                .default_value("name"),
+        )
+        .arg(
+            Arg::new("order")
+                .long("order")
+                .value_parser(clap::builder::EnumValueParser::<SortOrder>::new())
+                .value_name("asc|desc")
+                .default_value("asc"),
+        )
+        .arg(
+            Arg::new("offset")
+                .long("offset")
+                .value_parser(clap::value_parser!(usize))
+                .value_name("N")
+                .default_value("0"),
+        )
+        .arg(
+            Arg::new("limit")
+                .long("limit")
+                .value_parser(clap::value_parser!(usize))
+                .value_name("N"),
         )
 }
 
@@ -1111,33 +1362,33 @@ fn build_import_subcommand() -> Command {
                 .value_name("auto|cursor|claude|codex|windsurf|opencode|nodecode|vscode"),
         )
         .arg(
-            Arg::new("projectRoot")
+            Arg::new("project-root")
                 .long("project-root")
                 .value_name("DIR"),
         )
         .arg(
-            Arg::new("printJson")
+            Arg::new("print-json")
                 .long("json")
                 .action(ArgAction::SetTrue),
         )
         .arg(
-            Arg::new("strictConflicts")
+            Arg::new("strict-conflicts")
                 .long("strict-conflicts")
                 .action(ArgAction::SetTrue),
         )
         .arg(Arg::new("registry").long("registry").value_name("PATH"))
         .arg(
-            Arg::new("saveProfiles")
+            Arg::new("save-profiles")
                 .long("save-profiles")
                 .value_name("DIR"),
         )
         .arg(
-            Arg::new("bundleMCPway")
+            Arg::new("bundle-mcpway")
                 .long("bundle-mcpway")
                 .action(ArgAction::SetTrue),
         )
         .arg(
-            Arg::new("compileWrapper")
+            Arg::new("compile-wrapper")
                 .long("compile-wrapper")
                 .action(ArgAction::SetTrue),
         )
@@ -1172,7 +1423,7 @@ fn build_logs_subcommand() -> Command {
                 )
                 .arg(Arg::new("json").long("json").action(ArgAction::SetTrue))
                 .arg(
-                    Arg::new("noFollow")
+                    Arg::new("no-follow")
                         .long("no-follow")
                         .action(ArgAction::SetTrue),
                 ),
@@ -1213,7 +1464,7 @@ fn no_args_banner_text_with_style(use_ansi: bool) -> String {
     let mut output = String::new();
     output.push_str(&format!("{}\n", maybe_bold("MCPway CLI", use_ansi)));
     output.push_str("No input transport provided. Choose one input mode:\n");
-    output.push_str("  --stdio <CMD>, --sse <URL>, or --streamableHttp <URL>\n\n");
+    output.push_str("  --stdio <CMD>, --sse <URL>, or --streamable-http <URL>\n\n");
     output.push_str(&format!(
         "{}\n",
         maybe_bold("Generator Subcommands", use_ansi)
@@ -1234,7 +1485,7 @@ fn no_args_banner_text_with_style(use_ansi: bool) -> String {
     output.push_str(&format!("{}\n", maybe_bold("Quick Start", use_ansi)));
     output.push_str("  mcpway --stdio \"npx -y @modelcontextprotocol/server-everything\"\n");
     output.push_str("  mcpway --sse http://127.0.0.1:9000/sse\n");
-    output.push_str("  mcpway --streamableHttp http://127.0.0.1:9000/mcp\n\n");
+    output.push_str("  mcpway --streamable-http http://127.0.0.1:9000/mcp\n\n");
     output.push_str(&format!("{}\n", maybe_bold("Full Options", use_ansi)));
     output.push_str(&cli_help_text());
     output
@@ -1259,7 +1510,7 @@ fn default_output_transport(args: &[String]) -> Option<OutputTransport> {
     if args.iter().any(|arg| arg == "--sse") {
         return Some(OutputTransport::Stdio);
     }
-    if args.iter().any(|arg| arg == "--streamableHttp") {
+    if args.iter().any(|arg| arg == "--streamable-http") {
         return Some(OutputTransport::Stdio);
     }
     None
@@ -1383,22 +1634,9 @@ mod tests {
             parse(&["mcpway", "--sse", "http://127.0.0.1:9000/sse"]).expect("sse parse failed");
         assert_eq!(sse_cfg.output_transport, OutputTransport::Stdio);
 
-        let streamable_cfg = parse(&["mcpway", "--streamableHttp", "http://127.0.0.1:9000/mcp"])
+        let streamable_cfg = parse(&["mcpway", "--streamable-http", "http://127.0.0.1:9000/mcp"])
             .expect("streamable parse failed");
         assert_eq!(streamable_cfg.output_transport, OutputTransport::Stdio);
-    }
-
-    #[test]
-    fn parse_accepts_streamable_http_alias() {
-        let cfg = parse(&[
-            "mcpway",
-            "--stdio",
-            "cat",
-            "--outputTransport",
-            "streamableHttp",
-        ])
-        .expect("streamableHttp alias should parse");
-        assert_eq!(cfg.output_transport, OutputTransport::StreamableHttp);
     }
 
     #[test]
@@ -1407,7 +1645,7 @@ mod tests {
             "mcpway",
             "--stdio",
             "cat",
-            "--outputTransport",
+            "--output-transport",
             "streamable-http",
         ])
         .expect("streamable-http should parse");
@@ -1417,23 +1655,20 @@ mod tests {
     #[test]
     fn output_transport_value_enum_rejects_invalid_variant() {
         assert_eq!(
-            OutputTransport::from_str("streamableHttp", true).ok(),
-            Some(OutputTransport::StreamableHttp)
-        );
-        assert_eq!(
             OutputTransport::from_str("streamable-http", true).ok(),
             Some(OutputTransport::StreamableHttp)
         );
+        assert!(OutputTransport::from_str("streamableHttp", true).is_err());
         assert!(OutputTransport::from_str("streamable_http", true).is_err());
     }
 
     #[test]
     fn parse_rejects_non_positive_session_timeout() {
-        let err = parse(&["mcpway", "--stdio", "cat", "--sessionTimeout", "0"])
+        let err = parse(&["mcpway", "--stdio", "cat", "--session-timeout", "0"])
             .expect_err("expected invalid session timeout");
         match err {
             ConfigError::InvalidSessionTimeout(message) => {
-                assert!(message.contains("sessionTimeout must be a positive number"));
+                assert!(message.contains("session-timeout must be a positive number"));
             }
             other => panic!("unexpected error: {other:?}"),
         }
@@ -1441,14 +1676,34 @@ mod tests {
 
     #[test]
     fn parse_rejects_invalid_runtime_admin_port() {
-        let err = parse(&["mcpway", "--stdio", "cat", "--runtimeAdminPort", "70000"])
+        let err = parse(&["mcpway", "--stdio", "cat", "--runtime-admin-port", "70000"])
             .expect_err("expected invalid runtime admin port");
         match err {
             ConfigError::InvalidRuntimePort(message) => {
-                assert!(message.contains("runtimeAdminPort must be in 1..=65535"));
+                assert!(message.contains("runtime-admin-port must be in 1..=65535"));
             }
             other => panic!("unexpected error: {other:?}"),
         }
+    }
+
+    #[test]
+    fn parse_reads_runtime_admin_host_and_token() {
+        let cfg = parse(&[
+            "mcpway",
+            "--stdio",
+            "cat",
+            "--runtime-admin-port",
+            "9101",
+            "--runtime-admin-host",
+            "0.0.0.0",
+            "--runtime-admin-token",
+            "abc-token",
+        ])
+        .expect("runtime admin args should parse");
+
+        assert_eq!(cfg.runtime_admin_port, Some(9101));
+        assert_eq!(cfg.runtime_admin_host, "0.0.0.0");
+        assert_eq!(cfg.runtime_admin_token.as_deref(), Some("abc-token"));
     }
 
     #[test]
@@ -1528,6 +1783,8 @@ mod tests {
                 assert!(cfg.headers.is_empty());
                 assert_eq!(cfg.save_profile_dir, None);
                 assert_eq!(cfg.profile_name, None);
+                assert_eq!(cfg.retry_attempts, 2);
+                assert_eq!(cfg.circuit_failure_threshold, 3);
             }
             other => panic!("unexpected command: {other:?}"),
         }
@@ -1654,6 +1911,14 @@ mod tests {
                 assert_eq!(cfg.project_root, None);
                 assert!(!cfg.print_json);
                 assert!(!cfg.strict_conflicts);
+                assert_eq!(cfg.search, None);
+                assert_eq!(cfg.transport, None);
+                assert_eq!(cfg.scope, None);
+                assert!(!cfg.enabled_only);
+                assert_eq!(cfg.sort_by, DiscoverSortBy::Name);
+                assert_eq!(cfg.order, SortOrder::Asc);
+                assert_eq!(cfg.offset, 0);
+                assert_eq!(cfg.limit, None);
             }
             other => panic!("unexpected command: {other:?}"),
         }
@@ -1666,6 +1931,44 @@ mod tests {
         match cmd {
             CliCommand::Discover(cfg) => {
                 assert_eq!(cfg.from, ImportSource::Nodecode);
+            }
+            other => panic!("unexpected command: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parse_discover_subcommand_filters() {
+        let cmd = parse_cli(&[
+            "mcpway",
+            "discover",
+            "--search",
+            "github",
+            "--transport",
+            "streamable-http",
+            "--scope",
+            "project",
+            "--enabled-only",
+            "--sort",
+            "origin-path",
+            "--order",
+            "desc",
+            "--offset",
+            "10",
+            "--limit",
+            "25",
+        ])
+        .expect("discover filters should parse");
+
+        match cmd {
+            CliCommand::Discover(cfg) => {
+                assert_eq!(cfg.search.as_deref(), Some("github"));
+                assert_eq!(cfg.transport, Some(DiscoverTransport::StreamableHttp));
+                assert_eq!(cfg.scope, Some(DiscoverScope::Project));
+                assert!(cfg.enabled_only);
+                assert_eq!(cfg.sort_by, DiscoverSortBy::OriginPath);
+                assert_eq!(cfg.order, SortOrder::Desc);
+                assert_eq!(cfg.offset, 10);
+                assert_eq!(cfg.limit, Some(25));
             }
             other => panic!("unexpected command: {other:?}"),
         }
@@ -1740,7 +2043,7 @@ mod tests {
         assert!(help.contains("Usage: mcpway [OPTIONS]"));
         assert!(help.contains("--stdio <CMD>"));
         assert!(help.contains("--sse <URL>"));
-        assert!(help.contains("--streamableHttp <URL>"));
+        assert!(help.contains("--streamable-http <URL>"));
     }
 
     #[test]

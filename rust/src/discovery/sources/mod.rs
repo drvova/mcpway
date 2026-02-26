@@ -49,10 +49,7 @@ pub fn infer_transport(
                             segments.any(|segment| segment.eq_ignore_ascii_case("sse"))
                         })
                         .unwrap_or(false);
-                    let has_sse_hint = parsed.query_pairs().any(|(k, v)| {
-                        k.eq_ignore_ascii_case("transport") && v.eq_ignore_ascii_case("sse")
-                    });
-                    if has_sse_segment || has_sse_hint {
+                    if has_sse_segment {
                         return Some(DiscoveredTransport::Sse);
                     }
                     return Some(DiscoveredTransport::StreamableHttp);
@@ -180,5 +177,22 @@ pub fn source_issue(source: SourceKind, path: &Path, message: impl Into<String>)
         source,
         origin_path: path.to_string_lossy().to_string(),
         message: message.into(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn infer_transport_detects_sse_from_path_segment() {
+        let transport = infer_transport(None, Some("https://example.com/sse"), None);
+        assert_eq!(transport, Some(DiscoveredTransport::Sse));
+    }
+
+    #[test]
+    fn infer_transport_ignores_transport_query_hint() {
+        let transport = infer_transport(None, Some("https://example.com/mcp?transport=sse"), None);
+        assert_eq!(transport, Some(DiscoveredTransport::StreamableHttp));
     }
 }

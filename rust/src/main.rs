@@ -11,6 +11,7 @@ mod transport;
 mod types;
 
 use std::collections::{BTreeMap, HashMap};
+use std::net::ToSocketAddrs;
 use std::path::Path;
 use std::sync::Arc;
 
@@ -19,16 +20,18 @@ use tokio::sync::{mpsc, oneshot};
 
 use crate::config::{
     parse_cli_command, CliCommand, Config, ConnectConfig, ConnectProtocol, DiscoverConfig,
-    GenerateConfig, ImportConfig, ImportSource, LogLevel, OutputTransport,
+    DiscoverScope, DiscoverSortBy, DiscoverTransport, GenerateConfig, ImportConfig, ImportSource,
+    LogLevel, OutputTransport, SortOrder,
 };
 use crate::discovery::{
-    DiscoverOptions, DiscoveredServer, DiscoveredTransport, DiscoveryConflict, SourceKind,
+    DiscoverOptions, DiscoveredServer, DiscoveredTransport, DiscoveryConflict,
+    DiscoverySearchOptions, DiscoverySortField, DiscoverySortOrder, SourceKind,
 };
 use crate::gateways::{
     sse_to_stdio, stdio_to_sse, stdio_to_stdio, stdio_to_streamable_http, stdio_to_ws,
     streamable_http_to_stdio,
 };
-use crate::runtime::admin::spawn_admin_server;
+use crate::runtime::admin::{spawn_admin_server, AdminServerOptions};
 use crate::runtime::prompt::spawn_prompt;
 use crate::runtime::store::RuntimeArgsStore;
 use crate::runtime::{RuntimeApplyResult, RuntimeUpdate, RuntimeUpdateRequest};
@@ -100,7 +103,7 @@ async fn run_gateway(config: Config) -> Result<(), String> {
     );
     tracing::info!("Starting...");
     tracing::info!("mcpway gateway runtime initialized",);
-    tracing::info!("  - outputTransport: {:?}", config.output_transport);
+    tracing::info!("  - output-transport: {:?}", config.output_transport);
 
     let runtime_store = RuntimeArgsStore::new(RuntimeArgs {
         headers: config.headers.clone(),
@@ -135,7 +138,7 @@ async fn run_gateway(config: Config) -> Result<(), String> {
     }
 
     if let Some(port) = config.runtime_admin_port {
-        let addr = std::net::SocketAddr::from(([127, 0, 0, 1], port));
+        let addr = resolve_bind_addr(&config.runtime_admin_host, port)?;
         let update_tx = update_tx.clone();
         let handler: Arc<
             dyn Fn(RuntimeUpdate) -> BoxFuture<'static, RuntimeApplyResult> + Send + Sync,
@@ -159,8 +162,14 @@ async fn run_gateway(config: Config) -> Result<(), String> {
             }) as BoxFuture<'static, RuntimeApplyResult>
         });
         let runtime_clone = runtime_store.clone();
+        let admin_options = AdminServerOptions {
+            bearer_token: config.runtime_admin_token.clone(),
+            loopback_only: addr.ip().is_loopback(),
+            discovery_project_root: discovery::resolve_project_root(None).ok(),
+            discovery_source: None,
+        };
         tokio::spawn(async move {
-            spawn_admin_server(addr, runtime_clone, handler).await;
+            spawn_admin_server(addr, runtime_clone, handler, admin_options).await;
         });
     }
 
@@ -183,7 +192,7 @@ async fn run_gateway(config: Config) -> Result<(), String> {
             OutputTransport::Stdio => {
                 streamable_http_to_stdio::run(config, runtime_store, update_rx).await
             }
-            _ => Err("streamableHttp→output transport not supported".to_string()),
+            _ => Err("streamable-http→output transport not supported".to_string()),
         }
     } else {
         Err("Invalid input transport".to_string())
@@ -197,18 +206,21 @@ fn run_discover(config: DiscoverConfig) -> Result<(), String> {
         from: import_source_to_kind(config.from),
         project_root: config.project_root.clone(),
     };
-    let report = discovery::discover(&options)?;
+    let full_report = discovery::discover(&options)?;
 
-    if config.strict_conflicts && !report.conflicts.is_empty() {
-        return Err(render_conflicts_error(&report.conflicts));
+    if config.strict_conflicts && !full_report.conflicts.is_empty() {
+        return Err(render_conflicts_error(&full_report.conflicts));
     }
+
+    let search = discover_search_options_from_config(&config);
+    let report = discovery::apply_search(&full_report, &search);
 
     if config.print_json {
         let json = serde_json::to_string_pretty(&report)
             .map_err(|err| format!("Failed to serialize discover report: {err}"))?;
         println!("{json}");
     } else {
-        print_discover_human(&report);
+        print_discover_human(&report, full_report.servers.len());
     }
 
     Ok(())
@@ -294,6 +306,53 @@ fn import_source_to_kind(from: ImportSource) -> Option<SourceKind> {
     }
 }
 
+fn discover_search_options_from_config(config: &DiscoverConfig) -> DiscoverySearchOptions {
+    DiscoverySearchOptions {
+        query: config.search.clone(),
+        transport: config.transport.map(discover_transport_to_discovered),
+        scope: config.scope.map(discover_scope_to_discovery_scope),
+        source: None,
+        enabled_only: config.enabled_only,
+        sort_by: discover_sort_to_search_sort(config.sort_by),
+        sort_order: sort_order_to_discovery_sort_order(config.order),
+        offset: config.offset,
+        limit: config.limit,
+    }
+}
+
+fn discover_transport_to_discovered(transport: DiscoverTransport) -> DiscoveredTransport {
+    match transport {
+        DiscoverTransport::Stdio => DiscoveredTransport::Stdio,
+        DiscoverTransport::Sse => DiscoveredTransport::Sse,
+        DiscoverTransport::Ws => DiscoveredTransport::Ws,
+        DiscoverTransport::StreamableHttp => DiscoveredTransport::StreamableHttp,
+    }
+}
+
+fn discover_scope_to_discovery_scope(scope: DiscoverScope) -> discovery::DiscoveryScope {
+    match scope {
+        DiscoverScope::Project => discovery::DiscoveryScope::Project,
+        DiscoverScope::Global => discovery::DiscoveryScope::Global,
+    }
+}
+
+fn discover_sort_to_search_sort(sort: DiscoverSortBy) -> DiscoverySortField {
+    match sort {
+        DiscoverSortBy::Name => DiscoverySortField::Name,
+        DiscoverSortBy::Source => DiscoverySortField::Source,
+        DiscoverSortBy::Scope => DiscoverySortField::Scope,
+        DiscoverSortBy::Transport => DiscoverySortField::Transport,
+        DiscoverSortBy::OriginPath => DiscoverySortField::OriginPath,
+    }
+}
+
+fn sort_order_to_discovery_sort_order(order: SortOrder) -> DiscoverySortOrder {
+    match order {
+        SortOrder::Asc => DiscoverySortOrder::Asc,
+        SortOrder::Desc => DiscoverySortOrder::Desc,
+    }
+}
+
 fn render_conflicts_error(conflicts: &[DiscoveryConflict]) -> String {
     let mut out = String::from("Discovery conflicts detected with --strict-conflicts:\n");
     for conflict in conflicts {
@@ -309,12 +368,19 @@ fn render_conflicts_error(conflicts: &[DiscoveryConflict]) -> String {
     out
 }
 
-fn print_discover_human(report: &discovery::DiscoveryReport) {
+fn print_discover_human(report: &discovery::DiscoveryReport, total_servers: usize) {
     println!(
         "[mcpway] Discovered {} server(s) in {}",
         report.servers.len(),
         report.project_root
     );
+    if report.servers.len() != total_servers {
+        println!(
+            "[mcpway] Filtered results: {} / {} server(s)",
+            report.servers.len(),
+            total_servers
+        );
+    }
     for server in &report.servers {
         println!(
             "  - {} [{} {} {}]",
@@ -367,6 +433,15 @@ fn output_transport_label(output: OutputTransport) -> &'static str {
         OutputTransport::Ws => "ws",
         OutputTransport::StreamableHttp => "streamable-http",
     }
+}
+
+fn resolve_bind_addr(host: &str, port: u16) -> Result<std::net::SocketAddr, String> {
+    let target = format!("{host}:{port}");
+    target
+        .to_socket_addrs()
+        .map_err(|err| format!("Failed to resolve runtime admin host '{host}': {err}"))?
+        .next()
+        .ok_or_else(|| format!("No socket addresses resolved for runtime admin host '{host}'"))
 }
 
 fn save_import_profiles(
@@ -501,6 +576,11 @@ fn save_remote_profile(
         log_level: LogLevel::Info,
         protocol_version: "2024-11-05".to_string(),
         oauth: None,
+        retry_attempts: 2,
+        retry_base_delay_ms: 250,
+        retry_max_delay_ms: 2_000,
+        circuit_failure_threshold: 3,
+        circuit_cooldown_ms: 5_000,
     };
 
     generator::save_connect_profile(&connect, protocol)
