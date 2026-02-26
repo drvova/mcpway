@@ -1,0 +1,271 @@
+@layer components {
+  .app-overlay-backdrop[data-component="dialog-overlay"] {
+    position: fixed;
+    inset: 0;
+    z-index: 9998;
+    background-color: var(--background-base);
+    backdrop-filter: none;
+  }
+
+  .app-overlay[data-component="dialog"] {
+    position: fixed;
+    inset: 0;
+    z-index: 9999;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    pointer-events: none;
+  }
+
+  .app-overlay-container[data-slot="dialog-container"] {
+    position: relative;
+    z-index: 9999;
+    width: min(calc(100vw - 16px), 640px);
+    height: min(calc(100dvh - 16px), 560px);
+    display: flex;
+    flex-direction: column;
+  }
+
+  .app-overlay-card {
+    width: 100%;
+    height: 100%;
+    min-height: 320px;
+    pointer-events: auto;
+    overflow: hidden;
+    border: 1px solid color-mix(in oklab, var(--err) 60%, transparent);
+    border-radius: 0;
+    background: var(--surface-raised-stronger-non-alpha);
+    box-shadow: none;
+    display: grid;
+    grid-template-rows: auto auto auto minmax(0, 1fr) auto;
+    gap: 0;
+
+    scrollbar-width: none;
+    -ms-overflow-style: none;
+  }
+
+  .app-overlay-card::-webkit-scrollbar {
+    display: none;
+  }
+
+  .app-overlay-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 10px;
+    padding: 20px 20px 14px;
+    border-bottom: 1px solid color-mix(in oklab, var(--line-soft) 74%, transparent);
+    background: color-mix(in oklab, var(--surface-2) 90%, black 10%);
+  }
+
+  .app-overlay-title {
+    margin: 0;
+    font-family: var(--font-family-sans);
+    font-size: var(--font-size-large);
+    font-weight: var(--font-weight-medium);
+    line-height: 1.5;
+    letter-spacing: -0.01em;
+  }
+
+  .app-overlay-header-actions {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    flex: 0 0 auto;
+  }
+
+  .app-overlay-message {
+    margin: 0;
+    padding: 14px 20px 12px;
+    font-family: var(--font-family-sans);
+    color: color-mix(in oklab, var(--fg) 88%, transparent);
+    font-size: var(--font-size-base);
+    line-height: var(--line-height-large);
+    border-bottom: 1px solid color-mix(in oklab, var(--line-soft) 68%, transparent);
+    background: color-mix(in oklab, var(--surface-1) 90%, black 10%);
+  }
+
+  .app-overlay-meta {
+    margin: 0;
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    border-bottom: 1px solid color-mix(in oklab, var(--line-soft) 68%, transparent);
+    background: color-mix(in oklab, var(--surface-1) 92%, black 8%);
+  }
+
+  .app-overlay-meta > div {
+    min-width: 0;
+    display: grid;
+    gap: 4px;
+    padding: 8px 14px;
+  }
+
+  .app-overlay-meta > div + div {
+    border-left: 1px solid color-mix(in oklab, var(--line-soft) 68%, transparent);
+  }
+
+  .app-overlay-meta dt {
+    margin: 0;
+    font-family: var(--font-family-sans);
+    font-size: 0.66rem;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: color-mix(in oklab, var(--fg) 65%, transparent);
+  }
+
+  .app-overlay-meta dd {
+    margin: 0;
+    font-size: 0.76rem;
+    color: color-mix(in oklab, var(--fg) 94%, transparent);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .app-overlay-meta-kind dd {
+    display: flex;
+    align-items: center;
+  }
+
+  .app-overlay-body {
+    min-height: 0;
+    padding: 12px 20px;
+    display: grid;
+    gap: 8px;
+    align-content: start;
+    background: color-mix(in oklab, var(--surface-1) 92%, black 8%);
+  }
+
+  .app-overlay-section-title {
+    margin: 0;
+    font-family: var(--font-family-sans);
+    font-size: 0.7rem;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: color-mix(in oklab, var(--fg) 72%, transparent);
+  }
+
+  .app-overlay-details {
+    margin: 0;
+    width: 100%;
+    box-sizing: border-box;
+    border: 1px solid var(--line-soft);
+    border-radius: 0;
+    background: color-mix(in oklab, var(--surface-3) 84%, black 16%);
+    padding: 10px;
+    font-size: 0.74rem;
+    line-height: 1.4;
+    max-height: min(44vh, 340px);
+    overflow: auto;
+    white-space: pre-wrap;
+    word-break: break-word;
+  }
+
+  .app-overlay-actions {
+    display: flex;
+    justify-content: center;
+    flex-wrap: wrap;
+    gap: 8px;
+    padding: 14px 20px 20px;
+    border-top: 1px solid color-mix(in oklab, var(--line-soft) 68%, transparent);
+    background: color-mix(in oklab, var(--surface-2) 90%, black 10%);
+  }
+
+  .app-overlay-backdrop[data-component="dialog-overlay"] {
+    animation: overlayHide 100ms ease-in forwards;
+  }
+
+  .app-overlay-backdrop[data-component="dialog-overlay"][data-expanded] {
+    animation: overlayShow 150ms ease-out;
+  }
+
+  .app-overlay-card[data-slot="dialog-content"] {
+    animation: contentHide 100ms ease-in forwards;
+  }
+
+  .app-overlay-card[data-slot="dialog-content"][data-expanded] {
+    animation: contentShow 150ms ease-out;
+  }
+
+  @media (max-width: 760px) {
+    .app-overlay-container[data-slot="dialog-container"] {
+      width: min(calc(100vw - 12px), 640px);
+      height: min(calc(100dvh - 12px), 560px);
+    }
+
+    .app-overlay-header {
+      padding: 14px 12px 10px;
+    }
+
+    .app-overlay-meta {
+      grid-template-columns: 1fr;
+    }
+
+    .app-overlay-meta > div {
+      padding: 8px 12px;
+    }
+
+    .app-overlay-meta > div + div {
+      border-left: none;
+      border-top: 1px solid color-mix(in oklab, var(--line-soft) 68%, transparent);
+    }
+
+    .app-overlay-body {
+      padding: 10px 12px;
+    }
+
+    .app-overlay-details {
+      max-height: min(46vh, 300px);
+    }
+
+    .app-overlay-actions {
+      width: 100%;
+      flex-direction: column;
+      padding: 10px 12px 12px;
+    }
+
+    .app-overlay-actions [data-component="button"] {
+      width: 100%;
+    }
+  }
+
+  @keyframes overlayShow {
+    from {
+      opacity: 0;
+    }
+    to {
+      opacity: 1;
+    }
+  }
+
+  @keyframes overlayHide {
+    from {
+      opacity: 1;
+    }
+    to {
+      opacity: 0;
+    }
+  }
+
+  @keyframes contentShow {
+    from {
+      opacity: 0;
+      transform: scale(0.98);
+    }
+    to {
+      opacity: 1;
+      transform: scale(1);
+    }
+  }
+
+  @keyframes contentHide {
+    from {
+      opacity: 1;
+      transform: scale(1);
+    }
+    to {
+      opacity: 0;
+      transform: scale(0.98);
+    }
+  }
+}
