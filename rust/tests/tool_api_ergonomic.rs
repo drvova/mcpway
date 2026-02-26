@@ -138,10 +138,7 @@ async fn ergonomic_facade_supports_canonical_introspection_and_typed_calls() {
         .expect("build client");
 
     let ergonomic = client.ergonomic();
-    let tools = ergonomic
-        .list()
-        .await
-        .expect("list tools should succeed");
+    let tools = ergonomic.list().await.expect("list tools should succeed");
     assert_eq!(tools.len(), 1);
     assert_eq!(tools[0].name, "get-weather-report");
     assert_eq!(tools[0].required_keys, 1);

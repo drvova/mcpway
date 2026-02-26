@@ -88,9 +88,7 @@ fn collect_from_path(
             .get("url")
             .and_then(|v| v.as_str())
             .map(|v| v.to_string());
-        let explicit_type = server_obj
-            .get("type")
-            .and_then(|v| v.as_str());
+        let explicit_type = server_obj.get("type").and_then(|v| v.as_str());
 
         let transport = match infer_transport(command.as_deref(), url.as_deref(), explicit_type) {
             Some(transport) => transport,
