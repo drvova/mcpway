@@ -48,6 +48,7 @@ type OverlayError = ErrorItem & {
 };
 
 const ERROR_DEDUP_WINDOW_MS = 15_000;
+const ERROR_CHAIN_SEPARATOR = `\n${"─".repeat(40)}\n`;
 
 const DEFAULT_THEME: ThemePalette = {
   background: "#101114",
@@ -182,6 +183,81 @@ function detailsFromViteError(payload: unknown): { message: string; details?: st
   };
 }
 
+function safeJson(value: unknown): string {
+  const seen = new WeakSet<object>();
+  const json = JSON.stringify(
+    value,
+    (_key, part) => {
+      if (typeof part === "bigint") {
+        return part.toString();
+      }
+      if (typeof part === "object" && part) {
+        if (seen.has(part)) {
+          return "[Circular]";
+        }
+        seen.add(part);
+      }
+      return part;
+    },
+    2
+  );
+  return json ?? String(value);
+}
+
+function formatErrorChain(error: unknown, depth = 0, parentMessage?: string): string {
+  if (!error) {
+    return "Unknown error";
+  }
+
+  if (error instanceof Error) {
+    const isDuplicate = depth > 0 && parentMessage === error.message;
+    const prefix = depth > 0 ? `\n${ERROR_CHAIN_SEPARATOR}Caused by:\n` : "";
+    const header = `${error.name}${error.message ? `: ${error.message}` : ""}`;
+    const lines: string[] = [];
+    const stack = error.stack?.trim();
+
+    if (stack) {
+      const startsWithHeader = stack.startsWith(header);
+      if (!isDuplicate) {
+        lines.push(prefix + (startsWithHeader ? stack : `${header}\n${stack}`));
+      } else if (!startsWithHeader) {
+        lines.push(prefix + stack);
+      } else {
+        const trace = stack.split("\n").slice(1).join("\n").trim();
+        if (trace) {
+          lines.push(prefix + trace);
+        }
+      }
+    } else if (!isDuplicate) {
+      lines.push(prefix + header);
+    }
+
+    const causedBy = "cause" in error ? (error as { cause?: unknown }).cause : undefined;
+    if (causedBy) {
+      const nested = formatErrorChain(causedBy, depth + 1, error.message);
+      if (nested) {
+        lines.push(nested);
+      }
+    }
+    return lines.join("\n\n");
+  }
+
+  if (typeof error === "string") {
+    if (depth > 0 && parentMessage === error) {
+      return "";
+    }
+    const prefix = depth > 0 ? `\n${ERROR_CHAIN_SEPARATOR}Caused by:\n` : "";
+    return prefix + error;
+  }
+
+  const prefix = depth > 0 ? `\n${ERROR_CHAIN_SEPARATOR}Caused by:\n` : "";
+  return prefix + safeJson(error);
+}
+
+function formatFatalError(error: unknown): string {
+  return formatErrorChain(error, 0);
+}
+
 export function App() {
   const [token, setToken] = createSignal(localStorage.getItem("mcpway:web-token") ?? "");
   const [logs, setLogs] = createSignal<LogRecord[]>([]);
@@ -196,6 +272,8 @@ export function App() {
   const [search, setSearch] = createSignal("");
   const [panelErrors, setPanelErrors] = createSignal<Partial<Record<PanelErrorKey, string>>>({});
   const [overlayError, setOverlayError] = createSignal<OverlayError | null>(null);
+  const [fatalError, setFatalError] = createSignal<unknown | null>(null);
+  const [copiedFatalError, setCopiedFatalError] = createSignal(false);
 
   let socket: WebSocket | undefined;
   let errorSequence = 0;
@@ -282,6 +360,22 @@ export function App() {
 
   function dismissOverlay(): void {
     setOverlayError(null);
+  }
+
+  async function copyFatalErrorDetails(): Promise<void> {
+    const payload = fatalError();
+    if (!payload) {
+      return;
+    }
+    await navigator.clipboard.writeText(formatFatalError(payload));
+    setCopiedFatalError(true);
+    window.setTimeout(() => setCopiedFatalError(false), 2000);
+  }
+
+  function recoverFromFatalError(): void {
+    setFatalError(null);
+    reconnect();
+    void loadThemes(false);
   }
 
   async function fetchJson(path: string, init: RequestInit = {}): Promise<unknown> {
@@ -498,6 +592,7 @@ export function App() {
         event.error instanceof Error
           ? event.error.stack
           : `${event.filename || "unknown"}:${event.lineno}:${event.colno}`;
+      setFatalError(event.error ?? new Error(`${message}\n${details}`));
       raiseError("global", "runtime", message, {
         details,
         overlay: true
@@ -506,6 +601,7 @@ export function App() {
 
     const handleUnhandledRejection = (event: PromiseRejectionEvent) => {
       const details = detailsFromUnknown(event.reason, "Unhandled promise rejection");
+      setFatalError(event.reason ?? new Error(details.message));
       raiseError("global", "promise", details.message, {
         details: details.details,
         overlay: true
@@ -521,6 +617,7 @@ export function App() {
     const hotModule = import.meta.hot;
     const handleViteError = (payload: unknown) => {
       const details = detailsFromViteError(payload);
+      setFatalError(new Error(details.details ? `${details.message}\n\n${details.details}` : details.message));
       raiseError("global", "runtime", details.message, {
         details: details.details,
         overlay: true
@@ -553,151 +650,176 @@ export function App() {
   });
 
   return (
-    <div class="shell">
-      <header class="topbar">
-        <div class="topbar-copy">
-          <h1>MCPway Inspector</h1>
-          <p>Live logs + runtime state + themes</p>
-        </div>
-        <div class="topbar-actions">
-          <span class={`status-badge status-${status().toLowerCase().replace(/\s+/g, "-")}`}>
-            {status()}
-          </span>
-          <button class="action-button" type="button" onClick={() => void loadThemes(true)}>
-            Refresh Themes
-          </button>
-          <button class="action-button" type="button" onClick={reconnect}>
-            Reconnect
-          </button>
-        </div>
-      </header>
-
-      <main class="layout">
-        <div class="layout-grid-fixed">
-          <section class="panel sidebar">
-            <div class="panel-header">
-              <h2>Controls</h2>
-              <span class="meta">fixed layout</span>
+    <Show
+      when={fatalError()}
+      fallback={
+        <div class="shell">
+          <header class="topbar">
+            <div class="topbar-copy">
+              <h1>MCPway Inspector</h1>
+              <p>Live logs + runtime state + themes</p>
             </div>
+            <div class="topbar-actions">
+              <span class={`status-badge status-${status().toLowerCase().replace(/\s+/g, "-")}`}>
+                {status()}
+              </span>
+              <button class="action-button" type="button" onClick={() => void loadThemes(true)}>
+                Refresh Themes
+              </button>
+              <button class="action-button" type="button" onClick={reconnect}>
+                Reconnect
+              </button>
+            </div>
+          </header>
 
-            <div class="sidebar-body">
-              <div class="group">
-                <h2>Access</h2>
-                <label>
-                  API Token
-                  <input
-                    type="password"
-                    value={token()}
-                    onInput={(event) => setToken(event.currentTarget.value)}
-                    placeholder="optional bearer token"
-                  />
-                </label>
-              </div>
-
-              <div class="group">
-                <h2>Search</h2>
-                <label>
-                  Filter Logs
-                  <input
-                    type="text"
-                    value={search()}
-                    onInput={(event) => setSearch(event.currentTarget.value)}
-                    placeholder="message / target / transport"
-                  />
-                </label>
-              </div>
-
-              <div class="group">
-                <h2>Theme</h2>
-                <label>
-                  Color Scheme
-                  <select value={selectedThemeId()} onChange={(event) => setSelectedThemeId(event.currentTarget.value)}>
-                    <For each={themes()}>{(theme) => <option value={theme.id}>{theme.name}</option>}</For>
-                  </select>
-                </label>
-                <Show when={panelErrors().themes}>{(message) => <div class="panel-error">{message()}</div>}</Show>
-              </div>
-
-              <div class="group">
-                <h2>Sessions</h2>
-                <div class="sessions">
-                  <Show when={runtimeSessions().length > 0} fallback={<span class="empty">none</span>}>
-                    <For each={runtimeSessions()}>{(session) => <code>{session}</code>}</For>
-                  </Show>
+          <main class="layout">
+            <div class="layout-grid-fixed">
+              <section class="panel sidebar">
+                <div class="panel-header">
+                  <h2>Controls</h2>
+                  <span class="meta">fixed layout</span>
                 </div>
-              </div>
-            </div>
-          </section>
 
-          <section class="panel logs">
-            <div class="panel-header">
-              <h2>Logs</h2>
-              <span class="meta">{filteredLogs().length} rows</span>
-            </div>
+                <div class="sidebar-body">
+                  <div class="group">
+                    <h2>Access</h2>
+                    <label>
+                      API Token
+                      <input
+                        type="password"
+                        value={token()}
+                        onInput={(event) => setToken(event.currentTarget.value)}
+                        placeholder="optional bearer token"
+                      />
+                    </label>
+                  </div>
 
-            <Show when={panelErrors().logs}>{(message) => <div class="panel-error">{message()}</div>}</Show>
+                  <div class="group">
+                    <h2>Search</h2>
+                    <label>
+                      Filter Logs
+                      <input
+                        type="text"
+                        value={search()}
+                        onInput={(event) => setSearch(event.currentTarget.value)}
+                        placeholder="message / target / transport"
+                      />
+                    </label>
+                  </div>
 
-            <div class="log-grid">
-              <For each={filteredLogs()}>
-                {(entry) => (
-                  <article class="log-row">
-                    <time class="log-time">{formatTimestamp(entry.ts_utc)}</time>
-                    <strong class={`level level-${entry.level}`}>{entry.level}</strong>
-                    <code class="log-source">
-                      {entry.mode}:{entry.transport}
-                    </code>
-                    <p class="log-message">{entry.message || "(no message)"}</p>
-                  </article>
-                )}
-              </For>
-            </div>
-          </section>
+                  <div class="group">
+                    <h2>Theme</h2>
+                    <label>
+                      Color Scheme
+                      <select value={selectedThemeId()} onChange={(event) => setSelectedThemeId(event.currentTarget.value)}>
+                        <For each={themes()}>{(theme) => <option value={theme.id}>{theme.name}</option>}</For>
+                      </select>
+                    </label>
+                    <Show when={panelErrors().themes}>{(message) => <div class="panel-error">{message()}</div>}</Show>
+                  </div>
 
-          <section class="panel metrics">
-            <div class="panel-header">
-              <h2>Runtime</h2>
-              <span class="meta">{runtimeSessions().length} sessions</span>
-            </div>
-            <div class="metrics-body">
-              <Show when={panelErrors().runtime}>{(message) => <div class="panel-error">{message()}</div>}</Show>
+                  <div class="group">
+                    <h2>Sessions</h2>
+                    <div class="sessions">
+                      <Show when={runtimeSessions().length > 0} fallback={<span class="empty">none</span>}>
+                        <For each={runtimeSessions()}>{(session) => <code>{session}</code>}</For>
+                      </Show>
+                    </div>
+                  </div>
+                </div>
+              </section>
 
-              <dl>
-                <dt>Health</dt>
-                <dd>{runtimeHealth()}</dd>
-              </dl>
+              <section class="panel logs">
+                <div class="panel-header">
+                  <h2>Logs</h2>
+                  <span class="meta">{filteredLogs().length} rows</span>
+                </div>
 
-              <h2>Metrics Snapshot</h2>
-              <pre>{JSON.stringify(runtimeMetrics(), null, 2)}</pre>
-            </div>
-          </section>
-        </div>
-      </main>
+                <Show when={panelErrors().logs}>{(message) => <div class="panel-error">{message()}</div>}</Show>
 
-      <Show when={overlayError()}>
-        {(entry) => (
-          <Portal>
-            <div class="app-overlay" role="dialog" aria-modal="true" aria-label="Application error overlay">
-              <div class="app-overlay-backdrop" />
-              <section class="app-overlay-card">
-                <header class="app-overlay-header">
-                  <h2>MCPway Runtime Error</h2>
-                  <span class={`error-kind error-kind-${entry().kind}`}>{entry().kind}</span>
-                </header>
-                <p class="app-overlay-message">{entry().message}</p>
-                <Show when={entry().details}>{(details) => <pre class="app-overlay-details">{details()}</pre>}</Show>
-                <div class="app-overlay-actions">
-                  <button class="action-button" type="button" onClick={retryFromOverlay}>
-                    Retry
-                  </button>
-                  <button class="action-button" type="button" onClick={dismissOverlay}>
-                    Dismiss
-                  </button>
+                <div class="log-grid">
+                  <For each={filteredLogs()}>
+                    {(entry) => (
+                      <article class="log-row">
+                        <time class="log-time">{formatTimestamp(entry.ts_utc)}</time>
+                        <strong class={`level level-${entry.level}`}>{entry.level}</strong>
+                        <code class="log-source">
+                          {entry.mode}:{entry.transport}
+                        </code>
+                        <p class="log-message">{entry.message || "(no message)"}</p>
+                      </article>
+                    )}
+                  </For>
+                </div>
+              </section>
+
+              <section class="panel metrics">
+                <div class="panel-header">
+                  <h2>Runtime</h2>
+                  <span class="meta">{runtimeSessions().length} sessions</span>
+                </div>
+                <div class="metrics-body">
+                  <Show when={panelErrors().runtime}>{(message) => <div class="panel-error">{message()}</div>}</Show>
+
+                  <dl>
+                    <dt>Health</dt>
+                    <dd>{runtimeHealth()}</dd>
+                  </dl>
+
+                  <h2>Metrics Snapshot</h2>
+                  <pre>{JSON.stringify(runtimeMetrics(), null, 2)}</pre>
                 </div>
               </section>
             </div>
-          </Portal>
-        )}
-      </Show>
-    </div>
+          </main>
+
+          <Show when={overlayError()}>
+            {(entry) => (
+              <Portal>
+                <div class="app-overlay" role="dialog" aria-modal="true" aria-label="Application error overlay">
+                  <div class="app-overlay-backdrop" />
+                  <section class="app-overlay-card">
+                    <header class="app-overlay-header">
+                      <h2>MCPway Runtime Error</h2>
+                      <span class={`error-kind error-kind-${entry().kind}`}>{entry().kind}</span>
+                    </header>
+                    <p class="app-overlay-message">{entry().message}</p>
+                    <Show when={entry().details}>{(details) => <pre class="app-overlay-details">{details()}</pre>}</Show>
+                    <div class="app-overlay-actions">
+                      <button class="action-button" type="button" onClick={retryFromOverlay}>
+                        Retry
+                      </button>
+                      <button class="action-button" type="button" onClick={dismissOverlay}>
+                        Dismiss
+                      </button>
+                    </div>
+                  </section>
+                </div>
+              </Portal>
+            )}
+          </Show>
+        </div>
+      }
+    >
+      {(error) => (
+        <section class="fatal-error-page" role="alert" aria-live="assertive">
+          <div class="fatal-error-card">
+            <header class="fatal-error-header">
+              <h1>Application Error</h1>
+              <p>A code/runtime failure was detected. Details are below.</p>
+            </header>
+            <textarea class="fatal-error-details" readonly value={formatFatalError(error())} />
+            <div class="fatal-error-actions">
+              <button class="action-button" type="button" onClick={recoverFromFatalError}>
+                Retry App
+              </button>
+              <button class="action-button" type="button" onClick={() => void copyFatalErrorDetails()}>
+                {copiedFatalError() ? "Copied" : "Copy Details"}
+              </button>
+            </div>
+          </div>
+        </section>
+      )}
+    </Show>
   );
 }

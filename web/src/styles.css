@@ -442,6 +442,72 @@ label {
   gap: 8px;
 }
 
+.fatal-error-page {
+  width: 100%;
+  min-height: 100dvh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  background:
+    radial-gradient(120% 120% at 100% 0%, color-mix(in oklab, var(--err) 12%, transparent) 0%, transparent 42%),
+    radial-gradient(140% 120% at 0% 100%, color-mix(in oklab, var(--accent) 12%, transparent) 0%, transparent 56%),
+    linear-gradient(160deg, color-mix(in oklab, var(--bg) 95%, black 5%) 0%, var(--bg) 62%);
+}
+
+.fatal-error-card {
+  width: min(900px, 100%);
+  max-height: calc(100dvh - 56px);
+  border: 1px solid color-mix(in oklab, var(--err) 52%, transparent);
+  background: color-mix(in oklab, var(--surface-1) 92%, black 8%);
+  box-shadow: 0 30px 100px color-mix(in oklab, black 58%, transparent);
+  padding: 18px;
+  display: grid;
+  gap: 14px;
+}
+
+.fatal-error-header {
+  display: grid;
+  gap: 6px;
+}
+
+.fatal-error-header h1 {
+  margin: 0;
+  font-size: 1.04rem;
+  font-weight: 640;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.fatal-error-header p {
+  margin: 0;
+  font-size: 0.84rem;
+  color: color-mix(in oklab, var(--fg) 78%, transparent);
+}
+
+.fatal-error-details {
+  width: 100%;
+  min-height: 300px;
+  max-height: calc(100dvh - 230px);
+  resize: none;
+  border: 1px solid var(--line-soft);
+  background: color-mix(in oklab, var(--surface-3) 84%, black 16%);
+  color: color-mix(in oklab, var(--fg) 94%, transparent);
+  padding: 12px;
+  font: inherit;
+  font-size: 0.78rem;
+  line-height: 1.48;
+  white-space: pre-wrap;
+  overflow: auto;
+}
+
+.fatal-error-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  justify-content: flex-end;
+}
+
 @media (max-width: 1120px) {
   .shell {
     min-height: 100dvh;
@@ -502,6 +568,26 @@ label {
   }
 
   .app-overlay-actions {
+    width: 100%;
+    flex-direction: column;
+  }
+
+  .fatal-error-page {
+    padding: 12px;
+  }
+
+  .fatal-error-card {
+    max-height: calc(100dvh - 24px);
+    padding: 12px;
+  }
+
+  .fatal-error-details {
+    min-height: 260px;
+    max-height: calc(100dvh - 220px);
+    font-size: 0.74rem;
+  }
+
+  .fatal-error-actions {
     width: 100%;
     flex-direction: column;
   }
