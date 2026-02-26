@@ -1,0 +1,85 @@
+@layer components {
+  [data-component="input"] {
+    width: 100%;
+
+    [data-slot="input-input"] {
+      width: 100%;
+      color: var(--text-strong);
+      font-family: var(--font-family-sans);
+      font-size: var(--font-size-base);
+      font-weight: var(--font-weight-regular);
+      line-height: var(--line-height-large);
+
+      &:focus {
+        outline: none;
+      }
+
+      &::placeholder {
+        color: var(--text-weak);
+      }
+    }
+
+    &[data-variant="normal"] {
+      display: flex;
+      flex-direction: column;
+      align-items: flex-start;
+      gap: 8px;
+
+      [data-slot="input-label"] {
+        color: var(--text-weak);
+        font-family: var(--font-family-sans);
+        font-size: var(--font-size-small);
+        font-weight: var(--font-weight-medium);
+        line-height: var(--line-height-large);
+      }
+
+      [data-slot="input-wrapper"] {
+        display: flex;
+        align-items: start;
+        justify-content: space-between;
+        width: 100%;
+        border-radius: var(--radius-md);
+        border: 1px solid var(--border-weak-base);
+        background: var(--input-base);
+
+        &:focus-within:not(:has([readonly])) {
+          border-color: transparent;
+          box-shadow: var(--shadow-xs-border-focus);
+        }
+      }
+
+      [data-slot="input-input"] {
+        color: var(--text-strong);
+        display: flex;
+        min-height: 32px;
+        padding: 6px 10px;
+        align-items: center;
+        flex: 1;
+        min-width: 0;
+        background: transparent;
+        border: none;
+      }
+
+      textarea[data-slot="input-input"] {
+        height: auto;
+        min-height: 76px;
+        resize: vertical;
+      }
+
+      [data-slot="input-error"] {
+        color: var(--text-on-critical-base);
+        font-family: var(--font-family-sans);
+        font-size: var(--font-size-small);
+        font-weight: var(--font-weight-medium);
+        line-height: var(--line-height-large);
+      }
+
+      [data-slot="input-description"] {
+        color: var(--text-weak);
+        font-family: var(--font-family-sans);
+        font-size: var(--font-size-small);
+        line-height: var(--line-height-large);
+      }
+    }
+  }
+}

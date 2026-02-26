@@ -262,6 +262,21 @@ pub enum LogsConfig {
 }
 
 #[derive(Debug, Clone)]
+pub struct WebConfig {
+    pub host: String,
+    pub port: u16,
+    pub log_file: Option<PathBuf>,
+    pub admin_base_url: Option<String>,
+    pub admin_token: Option<String>,
+    pub auth_token: Option<String>,
+    pub theme_catalog_url: String,
+    pub theme_cache_ttl_seconds: u64,
+    pub theme_cache_file: Option<PathBuf>,
+    pub no_open_browser: bool,
+    pub log_level: LogLevel,
+}
+
+#[derive(Debug, Clone)]
 pub enum CliCommand {
     Run(Box<Config>),
     Generate(GenerateConfig),
@@ -270,6 +285,7 @@ pub enum CliCommand {
     Discover(DiscoverConfig),
     Import(ImportConfig),
     Logs(LogsConfig),
+    Web(WebConfig),
 }
 
 #[derive(Debug)]
@@ -318,6 +334,7 @@ fn parse_cli_command_from(raw_args: Vec<String>) -> Result<CliCommand, ConfigErr
         Some("discover") => parse_discover_config_from(raw_args).map(CliCommand::Discover),
         Some("import") => parse_import_config_from(raw_args).map(CliCommand::Import),
         Some("logs") => parse_logs_config_from(raw_args).map(CliCommand::Logs),
+        Some("web") => parse_web_config_from(raw_args).map(CliCommand::Web),
         _ => {
             if raw_args.len() <= 1 {
                 eprintln!("{}", no_args_banner_text());
@@ -842,6 +859,66 @@ fn parse_logs_config_from(raw_args: Vec<String>) -> Result<LogsConfig, ConfigErr
     }))
 }
 
+fn parse_web_config_from(raw_args: Vec<String>) -> Result<WebConfig, ConfigError> {
+    let matches = build_web_root_cli().get_matches_from(raw_args);
+    let Some(sub) = matches.subcommand_matches("web") else {
+        return Err(ConfigError::InvalidArg(
+            "Failed to parse web command".to_string(),
+        ));
+    };
+
+    let host = sub
+        .get_one::<String>("host")
+        .cloned()
+        .unwrap_or_else(|| "127.0.0.1".to_string());
+    let port = sub.get_one::<u16>("port").copied().unwrap_or(5173);
+    let log_file = sub.get_one::<String>("log-file").map(PathBuf::from);
+    let admin_base_url = sub.get_one::<String>("admin-base-url").cloned();
+    let admin_token = sub
+        .get_one::<String>("admin-token")
+        .cloned()
+        .or_else(|| env::var("MCPWAY_RUNTIME_ADMIN_TOKEN").ok())
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty());
+    let auth_token = sub
+        .get_one::<String>("auth-token")
+        .cloned()
+        .or_else(|| env::var("MCPWAY_WEB_AUTH_TOKEN").ok())
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty());
+    let theme_catalog_url = sub
+        .get_one::<String>("theme-catalog-url")
+        .cloned()
+        .unwrap_or_else(|| {
+            "https://api.github.com/repos/mbadolato/iTerm2-Color-Schemes/contents/schemes"
+                .to_string()
+        });
+    let theme_cache_ttl_seconds = sub
+        .get_one::<u64>("theme-cache-ttl-seconds")
+        .copied()
+        .unwrap_or(86_400);
+    let theme_cache_file = sub.get_one::<String>("theme-cache-file").map(PathBuf::from);
+    let no_open_browser = sub.get_flag("no-open-browser");
+    let log_level = sub
+        .get_one::<LogLevel>("log-level")
+        .copied()
+        .unwrap_or(LogLevel::Info);
+
+    Ok(WebConfig {
+        host,
+        port,
+        log_file,
+        admin_base_url,
+        admin_token,
+        auth_token,
+        theme_catalog_url,
+        theme_cache_ttl_seconds,
+        theme_cache_file,
+        no_open_browser,
+        log_level,
+    })
+}
+
 fn build_cli() -> Command {
     Command::new("mcpway")
         .arg(Arg::new("stdio").long("stdio").value_name("CMD"))
@@ -1025,6 +1102,12 @@ fn build_logs_root_cli() -> Command {
     Command::new("mcpway")
         .subcommand_required(true)
         .subcommand(build_logs_subcommand())
+}
+
+fn build_web_root_cli() -> Command {
+    Command::new("mcpway")
+        .subcommand_required(true)
+        .subcommand(build_web_subcommand())
 }
 
 fn build_generate_subcommand() -> Command {
@@ -1439,6 +1522,71 @@ fn build_logs_subcommand() -> Command {
         )
 }
 
+fn build_web_subcommand() -> Command {
+    Command::new("web")
+        .about("Serve MCPway web inspector")
+        .arg(
+            Arg::new("host")
+                .long("host")
+                .value_name("HOST")
+                .default_value("127.0.0.1"),
+        )
+        .arg(
+            Arg::new("port")
+                .long("port")
+                .value_parser(clap::value_parser!(u16))
+                .value_name("PORT")
+                .default_value("5173"),
+        )
+        .arg(Arg::new("log-file").long("log-file").value_name("PATH"))
+        .arg(
+            Arg::new("admin-base-url")
+                .long("admin-base-url")
+                .value_name("URL"),
+        )
+        .arg(
+            Arg::new("admin-token")
+                .long("admin-token")
+                .value_name("TOKEN"),
+        )
+        .arg(
+            Arg::new("auth-token")
+                .long("auth-token")
+                .value_name("TOKEN"),
+        )
+        .arg(
+            Arg::new("theme-catalog-url")
+                .long("theme-catalog-url")
+                .value_name("URL")
+                .default_value(
+                    "https://api.github.com/repos/mbadolato/iTerm2-Color-Schemes/contents/schemes",
+                ),
+        )
+        .arg(
+            Arg::new("theme-cache-ttl-seconds")
+                .long("theme-cache-ttl-seconds")
+                .value_parser(clap::value_parser!(u64).range(1..))
+                .value_name("SECONDS")
+                .default_value("86400"),
+        )
+        .arg(
+            Arg::new("theme-cache-file")
+                .long("theme-cache-file")
+                .value_name("PATH"),
+        )
+        .arg(
+            Arg::new("no-open-browser")
+                .long("no-open-browser")
+                .action(ArgAction::SetTrue),
+        )
+        .arg(
+            Arg::new("log-level")
+                .long("log-level")
+                .value_parser(clap::builder::EnumValueParser::<LogLevel>::new())
+                .default_value("info"),
+        )
+}
+
 fn required_arg<'a>(matches: &'a ArgMatches, key: &str) -> Result<&'a str, ConfigError> {
     matches
         .get_one::<String>(key)
@@ -1492,6 +1640,8 @@ fn no_args_banner_text_with_style(use_ansi: bool) -> String {
     ));
     output.push_str("  mcpway discover --from auto\n");
     output.push_str("  mcpway import --from auto --save-profiles ./profiles\n\n");
+    output.push_str(&format!("{}\n", maybe_bold("Web Inspector", use_ansi)));
+    output.push_str("  mcpway web --port 5173\n\n");
     output.push_str(&format!("{}\n", maybe_bold("Quick Start", use_ansi)));
     output.push_str("  mcpway --stdio \"npx -y @modelcontextprotocol/server-everything\"\n");
     output.push_str("  mcpway --sse http://127.0.0.1:9000/sse\n");
@@ -2075,6 +2225,76 @@ mod tests {
     }
 
     #[test]
+    fn parse_web_subcommand_defaults() {
+        let cmd = parse_cli(&["mcpway", "web"]).expect("web parse failed");
+        match cmd {
+            CliCommand::Web(cfg) => {
+                assert_eq!(cfg.host, "127.0.0.1");
+                assert_eq!(cfg.port, 5173);
+                assert_eq!(cfg.log_file, None);
+                assert_eq!(cfg.admin_base_url, None);
+                assert_eq!(cfg.admin_token, None);
+                assert_eq!(cfg.auth_token, None);
+                assert_eq!(cfg.theme_cache_ttl_seconds, 86_400);
+                assert_eq!(cfg.theme_cache_file, None);
+                assert!(!cfg.no_open_browser);
+                assert_eq!(cfg.log_level, LogLevel::Info);
+            }
+            other => panic!("unexpected command: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parse_web_subcommand_with_options() {
+        let cmd = parse_cli(&[
+            "mcpway",
+            "web",
+            "--host",
+            "0.0.0.0",
+            "--port",
+            "6123",
+            "--log-file",
+            "./mcpway.ndjson",
+            "--admin-base-url",
+            "http://127.0.0.1:9101",
+            "--admin-token",
+            "secret",
+            "--auth-token",
+            "ui-secret",
+            "--theme-catalog-url",
+            "https://example.com/themes.json",
+            "--theme-cache-ttl-seconds",
+            "120",
+            "--theme-cache-file",
+            "./theme-cache.json",
+            "--no-open-browser",
+            "--log-level",
+            "debug",
+        ])
+        .expect("web parse options failed");
+
+        match cmd {
+            CliCommand::Web(cfg) => {
+                assert_eq!(cfg.host, "0.0.0.0");
+                assert_eq!(cfg.port, 6123);
+                assert_eq!(cfg.log_file, Some(PathBuf::from("./mcpway.ndjson")));
+                assert_eq!(cfg.admin_base_url, Some("http://127.0.0.1:9101".to_string()));
+                assert_eq!(cfg.admin_token, Some("secret".to_string()));
+                assert_eq!(cfg.auth_token, Some("ui-secret".to_string()));
+                assert_eq!(
+                    cfg.theme_catalog_url,
+                    "https://example.com/themes.json".to_string()
+                );
+                assert_eq!(cfg.theme_cache_ttl_seconds, 120);
+                assert_eq!(cfg.theme_cache_file, Some(PathBuf::from("./theme-cache.json")));
+                assert!(cfg.no_open_browser);
+                assert_eq!(cfg.log_level, LogLevel::Debug);
+            }
+            other => panic!("unexpected command: {other:?}"),
+        }
+    }
+
+    #[test]
     fn cli_help_contains_usage_and_transport_flags() {
         let help = cli_help_text();
         assert!(help.contains("Usage: mcpway [OPTIONS]"));
@@ -2090,6 +2310,7 @@ mod tests {
         assert!(banner.contains("Generator Subcommands"));
         assert!(banner.contains("Ad-hoc Connect"));
         assert!(banner.contains("Zero-Config Discovery"));
+        assert!(banner.contains("Web Inspector"));
         assert!(banner.contains("Quick Start"));
         assert!(banner.contains("Full Options"));
         assert!(banner.contains("mcpway --stdio"));

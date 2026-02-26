@@ -116,6 +116,7 @@ Commands:
 - `mcpway import [OPTIONS]`
 - `mcpway logs <COMMAND>`
 - `mcpway logs tail [OPTIONS]`
+- `mcpway web [OPTIONS]`
 
 ### mcpway [OPTIONS]
 `--stdio` `--sse` `--streamable-http` `--output-transport` `--port` `--base-url` `--sse-path` `--message-path` `--streamable-http-path` `--log-level` `--cors` `--health-endpoint` `--header` `--env` `--oauth2-bearer` `--stateful` `--session-timeout` `--protocol-version` `--runtime-prompt` `--runtime-admin-port` `--runtime-admin-host` `--runtime-admin-token` `--retry-attempts` `--retry-base-delay-ms` `--retry-max-delay-ms` `--circuit-failure-threshold` `--circuit-cooldown-ms`
@@ -137,6 +138,26 @@ Commands:
 
 ### mcpway logs tail
 `--file` `--lines` `--level` `--transport` `--json` `--no-follow`
+
+### mcpway web
+`--host` `--port` `--log-file` `--admin-base-url` `--admin-token` `--auth-token` `--theme-catalog-url` `--theme-cache-ttl-seconds` `--theme-cache-file` `--no-open-browser` `--log-level`
+
+Starts a minimal MCPway web inspector with:
+- Live log stream over WebSocket (`/api/logs/ws`) and recent log query (`/api/logs/recent`)
+- Optional runtime admin proxy panels (`/api/runtime/*`, `/api/discovery/search`)
+- Theme catalog support for iTerm2-style schemes (`/api/themes/catalog`, `/api/themes/refresh`)
+
+Examples:
+```bash
+# local-only web inspector (default bind 127.0.0.1:5173)
+mcpway web
+
+# use a specific log file and runtime admin endpoint
+mcpway web --log-file ~/.mcpway/logs/mcpway.ndjson --admin-base-url http://127.0.0.1:9101
+
+# protect API routes with a bearer token
+mcpway web --auth-token my-web-token
+```
 
 ### Runtime Admin API
 When `--runtime-admin-port` is set, the admin server exposes:

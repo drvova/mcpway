@@ -1,6 +1,6 @@
 [package]
 name = "mcpway"
-version = "0.1.5"
+version = "0.1.6"
 edition = "2021"
 description = "Run MCP stdio servers over SSE, WebSocket, Streamable HTTP, and gRPC transports."
 license = "MIT"
@@ -39,6 +39,9 @@ arc-swap = "1.7"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
 tracing-opentelemetry = "0.32"
+include_dir = "0.7"
+mime_guess = "2.0"
+plist = "1.7"
 opentelemetry = "0.31"
 opentelemetry_sdk = "0.31"
 opentelemetry-otlp = "0.31"
