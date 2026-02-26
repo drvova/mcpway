@@ -25,6 +25,7 @@ Crates.io: <https://crates.io/crates/mcpway>
 Platform notes:
 
 - OAuth browser launch uses platform-native open commands (`open` on macOS, `xdg-open` on Linux, `start` on Windows).
+- On Linux headless environments (no `DISPLAY` and no `WAYLAND_DISPLAY`), automatic browser launch is skipped.
 - `connect --oauth-no-browser` is available when launching a browser is not possible in your environment.
 
 ## Quick Start
@@ -146,6 +147,7 @@ Starts a minimal MCPway web inspector with:
 - Live log stream over WebSocket (`/api/logs/ws`) and recent log query (`/api/logs/recent`)
 - Optional runtime admin proxy panels (`/api/runtime/*`, `/api/discovery/search`)
 - Theme catalog support for iTerm2-style schemes (`/api/themes/catalog`, `/api/themes/refresh`)
+- Automatic browser launch when a graphical session is detected (or disable explicitly with `--no-open-browser`)
 
 Examples:
 ```bash
