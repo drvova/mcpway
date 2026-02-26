@@ -1,4 +1,8 @@
 @layer components {
+  .log-detail-container[data-slot="dialog-container"] {
+    height: min(calc(100dvh - 16px), 760px);
+  }
+
   .log-detail-card {
     border-color: color-mix(in oklab, var(--accent) 56%, transparent);
   }
@@ -35,7 +39,8 @@
     font-family: var(--font-family-mono);
     font-size: 0.72rem;
     line-height: 1.45;
-    max-height: min(20vh, 180px);
+    max-height: none;
+    overflow: visible;
   }
 
   .log-detail-message-block {
@@ -49,6 +54,10 @@
   }
 
   @media (max-width: 760px) {
+    .log-detail-container[data-slot="dialog-container"] {
+      height: min(calc(100dvh - 12px), 760px);
+    }
+
     .log-detail-meta {
       grid-template-columns: repeat(2, minmax(0, 1fr));
     }
