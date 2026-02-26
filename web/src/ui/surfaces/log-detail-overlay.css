@@ -35,12 +35,38 @@
     gap: 6px;
   }
 
+  .log-detail-summary {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    cursor: pointer;
+    user-select: none;
+    list-style: none;
+    border: 1px solid var(--line-soft);
+    background: color-mix(in oklab, var(--surface-2) 90%, black 10%);
+    padding: 8px 10px;
+  }
+
+  .log-detail-summary::-webkit-details-marker {
+    display: none;
+  }
+
+  .log-detail-summary-state {
+    font-family: var(--font-family-sans);
+    font-size: 0.64rem;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: color-mix(in oklab, var(--fg) 66%, transparent);
+  }
+
   .log-detail-pre {
     font-family: var(--font-family-mono);
     font-size: 0.72rem;
     line-height: 1.45;
     max-height: none;
     overflow: visible;
+    margin: 0;
   }
 
   .log-detail-message-block {

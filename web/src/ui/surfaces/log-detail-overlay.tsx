@@ -17,6 +17,9 @@ export interface LogDetailOverlayProps {
   onDismiss: () => void;
 }
 
+const AUTO_COLLAPSE_CHAR_THRESHOLD = 900;
+const AUTO_COLLAPSE_LINE_THRESHOLD = 18;
+
 function formatAbsoluteTimestamp(unixSeconds: number): string {
   if (!unixSeconds) {
     return "unknown";
@@ -24,8 +27,20 @@ function formatAbsoluteTimestamp(unixSeconds: number): string {
   return new Date(unixSeconds * 1000).toLocaleString();
 }
 
+function shouldAutoCollapse(content: string): boolean {
+  const normalized = content.trim();
+  if (!normalized) {
+    return false;
+  }
+  const lineCount = normalized.split(/\r?\n/).length;
+  return normalized.length > AUTO_COLLAPSE_CHAR_THRESHOLD || lineCount > AUTO_COLLAPSE_LINE_THRESHOLD;
+}
+
 export function LogDetailOverlay(props: LogDetailOverlayProps) {
   const [copyState, setCopyState] = createSignal<"idle" | "copied" | "failed">("idle");
+  const [messageCollapsed, setMessageCollapsed] = createSignal(false);
+  const [fieldsCollapsed, setFieldsCollapsed] = createSignal(false);
+  const [rawCollapsed, setRawCollapsed] = createSignal(false);
   let resetTimer: number | undefined;
 
   const messageText = createMemo(() => {
@@ -49,8 +64,20 @@ export function LogDetailOverlay(props: LogDetailOverlayProps) {
   });
 
   createEffect(() => {
-    props.entry;
+    const current = props.entry;
+    const message = messageText();
+    const fields = fieldsText();
+    const raw = rawPayload();
     setCopyState("idle");
+    if (!current) {
+      setMessageCollapsed(false);
+      setFieldsCollapsed(false);
+      setRawCollapsed(false);
+      return;
+    }
+    setMessageCollapsed(shouldAutoCollapse(message));
+    setFieldsCollapsed(shouldAutoCollapse(fields));
+    setRawCollapsed(shouldAutoCollapse(raw));
   });
 
   onCleanup(() => {
@@ -125,20 +152,41 @@ export function LogDetailOverlay(props: LogDetailOverlayProps) {
                     </dl>
 
                     <section class="app-overlay-body log-detail-body" data-slot="dialog-body">
-                      <div class="log-detail-section">
-                        <h3 class="app-overlay-section-title">Message</h3>
+                      <details
+                        class="log-detail-section"
+                        open={!messageCollapsed()}
+                        onToggle={(event) => setMessageCollapsed(!event.currentTarget.open)}
+                      >
+                        <summary class="log-detail-summary">
+                          <span class="app-overlay-section-title">Message</span>
+                          <span class="log-detail-summary-state">{messageCollapsed() ? "Expand" : "Collapse"}</span>
+                        </summary>
                         <pre class="app-overlay-details log-detail-pre log-detail-message-block">{messageText()}</pre>
-                      </div>
+                      </details>
 
-                      <div class="log-detail-section">
-                        <h3 class="app-overlay-section-title">Fields</h3>
+                      <details
+                        class="log-detail-section"
+                        open={!fieldsCollapsed()}
+                        onToggle={(event) => setFieldsCollapsed(!event.currentTarget.open)}
+                      >
+                        <summary class="log-detail-summary">
+                          <span class="app-overlay-section-title">Fields</span>
+                          <span class="log-detail-summary-state">{fieldsCollapsed() ? "Expand" : "Collapse"}</span>
+                        </summary>
                         <pre class="app-overlay-details log-detail-pre">{fieldsText()}</pre>
-                      </div>
+                      </details>
 
-                      <div class="log-detail-section">
-                        <h3 class="app-overlay-section-title">Raw JSON</h3>
+                      <details
+                        class="log-detail-section"
+                        open={!rawCollapsed()}
+                        onToggle={(event) => setRawCollapsed(!event.currentTarget.open)}
+                      >
+                        <summary class="log-detail-summary">
+                          <span class="app-overlay-section-title">Raw JSON</span>
+                          <span class="log-detail-summary-state">{rawCollapsed() ? "Expand" : "Collapse"}</span>
+                        </summary>
                         <pre class="app-overlay-details log-detail-pre">{rawPayload()}</pre>
-                      </div>
+                      </details>
                     </section>
 
                     <div class="app-overlay-actions log-detail-actions">
