@@ -1,0 +1,102 @@
+@layer components {
+  .fatal-error-page {
+    width: 100%;
+    min-height: 100dvh;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 24px;
+    background:
+      radial-gradient(120% 120% at 100% 0%, color-mix(in oklab, var(--err) 12%, transparent) 0%, transparent 42%),
+      radial-gradient(140% 120% at 0% 100%, color-mix(in oklab, var(--accent) 12%, transparent) 0%, transparent 56%),
+      linear-gradient(160deg, color-mix(in oklab, var(--bg) 95%, black 5%) 0%, var(--bg) 62%);
+  }
+
+  .fatal-error-card {
+    width: min(900px, 100%);
+    max-height: calc(100dvh - 56px);
+    border: 1px solid color-mix(in oklab, var(--err) 52%, transparent);
+    background: color-mix(in oklab, var(--surface-1) 92%, black 8%);
+    box-shadow: 0 30px 100px color-mix(in oklab, black 58%, transparent);
+    padding: 18px;
+    display: grid;
+    gap: 14px;
+  }
+
+  .fatal-error-logo {
+    width: min(420px, 100%);
+    height: auto;
+    display: block;
+    filter: drop-shadow(0 0 10px color-mix(in oklab, var(--accent) 28%, transparent));
+  }
+
+  .fatal-error-header {
+    display: grid;
+    gap: 6px;
+  }
+
+  .fatal-error-header h1 {
+    margin: 0;
+    font-family: var(--font-family-sans);
+    font-size: 1.04rem;
+    font-weight: 640;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+  }
+
+  .fatal-error-header p {
+    margin: 0;
+    font-family: var(--font-family-sans);
+    font-size: 0.84rem;
+    color: color-mix(in oklab, var(--fg) 78%, transparent);
+  }
+
+  .fatal-error-field {
+    width: 100%;
+  }
+
+  .fatal-error-field [data-slot="input-wrapper"] {
+    width: 100%;
+    box-sizing: border-box;
+    border-radius: 0;
+    min-height: min(50dvh, 420px);
+  }
+
+  .fatal-error-field [data-slot="input-input"] {
+    width: 100%;
+    box-sizing: border-box;
+    border-radius: 0;
+    min-height: min(50dvh, 420px);
+    font-family: var(--font-family-mono);
+    font-size: 0.78rem;
+    line-height: 1.48;
+    white-space: pre-wrap;
+  }
+
+  .fatal-error-actions {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    justify-content: flex-end;
+  }
+
+  @media (max-width: 760px) {
+    .fatal-error-page {
+      padding: 12px;
+    }
+
+    .fatal-error-card {
+      max-height: calc(100dvh - 24px);
+      padding: 12px;
+    }
+
+    .fatal-error-actions {
+      width: 100%;
+      flex-direction: column;
+    }
+
+    .fatal-error-actions [data-component="button"] {
+      width: 100%;
+    }
+  }
+}

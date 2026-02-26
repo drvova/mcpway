@@ -10,6 +10,7 @@ mod runtime;
 mod support;
 mod transport;
 mod types;
+mod web;
 
 use std::collections::{BTreeMap, HashMap};
 use std::net::ToSocketAddrs;
@@ -88,6 +89,12 @@ async fn main() {
         }
         CliCommand::Logs(config) => {
             if let Err(err) = logs::run(config).await {
+                eprintln!("[mcpway] Error: {err}");
+                std::process::exit(1);
+            }
+        }
+        CliCommand::Web(config) => {
+            if let Err(err) = web::run(config).await {
                 eprintln!("[mcpway] Error: {err}");
                 std::process::exit(1);
             }

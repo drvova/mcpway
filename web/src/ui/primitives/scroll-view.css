@@ -1,0 +1,29 @@
+@layer components {
+  [data-component="scroll-view"] {
+    position: relative;
+    overflow: auto;
+    scrollbar-width: thin;
+    scrollbar-color: var(--border-weaker-base) transparent;
+  }
+
+  [data-component="scroll-view"]::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+  }
+
+  [data-component="scroll-view"]::-webkit-scrollbar-track {
+    background: transparent;
+  }
+
+  [data-component="scroll-view"]::-webkit-scrollbar-thumb {
+    background: var(--border-weaker-base);
+    border-radius: 999px;
+    border: 2px solid transparent;
+    background-clip: content-box;
+  }
+
+  [data-component="scroll-view"]::-webkit-scrollbar-thumb:hover {
+    background: var(--border-strong-base);
+    background-clip: content-box;
+  }
+}

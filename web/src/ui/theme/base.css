@@ -1,0 +1,40 @@
+@layer base {
+  *,
+  *::before,
+  *::after {
+    box-sizing: border-box;
+  }
+
+  html,
+  body,
+  #root {
+    margin: 0;
+    width: 100%;
+    min-width: 0;
+    height: 100%;
+    min-height: 100dvh;
+  }
+
+  body {
+    font-family: var(--font-family-mono);
+    color: var(--text-strong);
+    background:
+      radial-gradient(120% 120% at 100% 0%, color-mix(in oklab, var(--accent) 14%, transparent) 0%, transparent 45%),
+      radial-gradient(140% 120% at 0% 100%, color-mix(in oklab, var(--muted) 28%, transparent) 0%, transparent 56%),
+      repeating-linear-gradient(
+        90deg,
+        color-mix(in oklab, var(--bg) 95%, white 5%) 0 1px,
+        transparent 1px 20px
+      ),
+      linear-gradient(160deg, color-mix(in oklab, var(--bg) 94%, white 6%) 0%, var(--bg) 62%);
+    overflow: hidden;
+  }
+
+  button,
+  input,
+  select,
+  textarea {
+    font: inherit;
+    color: inherit;
+  }
+}

@@ -1,0 +1,65 @@
+@layer components {
+  [data-component="icon-button"] {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: var(--radius-sm);
+    text-decoration: none;
+    user-select: none;
+    aspect-ratio: 1;
+    flex-shrink: 0;
+    border: 1px solid transparent;
+
+    &[data-size="small"] {
+      width: 20px;
+      height: 20px;
+      font-size: 0.8rem;
+    }
+
+    &[data-size="normal"] {
+      width: 24px;
+      height: 24px;
+      font-size: 0.9rem;
+    }
+
+    &[data-size="large"] {
+      width: 32px;
+      height: 32px;
+      font-size: 1rem;
+    }
+
+    &[data-variant="secondary"] {
+      background-color: var(--button-secondary-base);
+      color: var(--text-strong);
+      box-shadow: var(--shadow-xs-border-base);
+
+      &:hover:not(:disabled) {
+        background-color: var(--button-secondary-hover);
+      }
+    }
+
+    &[data-variant="primary"] {
+      background-color: var(--icon-strong-base);
+      color: var(--icon-invert-base);
+
+      &:hover:not(:disabled) {
+        background-color: var(--icon-strong-hover);
+      }
+    }
+
+    &[data-variant="ghost"] {
+      background-color: transparent;
+      color: var(--icon-base);
+
+      &:hover:not(:disabled),
+      &:focus-visible:not(:disabled) {
+        background-color: var(--surface-base-hover);
+      }
+    }
+
+    &:disabled {
+      opacity: 0.65;
+      cursor: not-allowed;
+    }
+  }
+}

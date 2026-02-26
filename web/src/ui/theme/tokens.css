@@ -1,0 +1,88 @@
+@layer theme {
+  :root {
+    color-scheme: dark;
+
+    --font-family-sans: "Inter", "IBM Plex Sans", "Segoe UI", sans-serif;
+    --font-family-mono: "IBM Plex Mono", "JetBrains Mono", "Fira Code", monospace;
+
+    --font-size-small: 12px;
+    --font-size-base: 14px;
+    --font-size-large: 16px;
+
+    --font-weight-regular: 400;
+    --font-weight-medium: 500;
+
+    --line-height-normal: 1.3;
+    --line-height-large: 1.45;
+
+    --radius-sm: 0;
+    --radius-md: 0;
+
+    --bg: #101114;
+    --fg: #dde1ea;
+    --cursor: #f5f7fa;
+    --accent: #4a90e2;
+    --muted: #3a3f4b;
+    --ok: #27c93f;
+    --warn: #ffbd2e;
+    --err: #ff5f56;
+
+    --surface-1: color-mix(in oklab, var(--bg) 89%, white 11%);
+    --surface-2: color-mix(in oklab, var(--bg) 84%, white 16%);
+    --surface-3: color-mix(in oklab, var(--bg) 79%, white 21%);
+    --surface-disabled: color-mix(in oklab, var(--surface-2) 84%, black 16%);
+    --line-soft: color-mix(in oklab, var(--fg) 18%, transparent);
+    --line-strong: color-mix(in oklab, var(--fg) 31%, transparent);
+    --panel-shadow: 0 18px 50px color-mix(in oklab, black 42%, transparent);
+
+    --background-base: var(--bg);
+    --background-weak: var(--surface-1);
+    --surface-inset-base: color-mix(in oklab, var(--surface-2) 90%, black 10%);
+    --surface-base-hover: color-mix(in oklab, var(--surface-2) 82%, black 18%);
+    --surface-base-active: color-mix(in oklab, var(--surface-2) 74%, black 26%);
+    --surface-raised-base: var(--surface-2);
+    --surface-raised-base-active: color-mix(in oklab, var(--surface-2) 68%, black 32%);
+    --surface-raised-base-hover: color-mix(in oklab, var(--surface-2) 74%, white 26%);
+    --surface-raised-stronger-non-alpha: var(--surface-1);
+
+    --input-base: color-mix(in oklab, var(--surface-2) 90%, black 10%);
+    --input-hover: color-mix(in oklab, var(--surface-2) 85%, black 15%);
+
+    --text-strong: var(--fg);
+    --text-base: color-mix(in oklab, var(--fg) 87%, transparent);
+    --text-weak: color-mix(in oklab, var(--fg) 70%, transparent);
+
+    --button-secondary-base: color-mix(in oklab, var(--surface-2) 90%, black 10%);
+    --button-secondary-hover: color-mix(in oklab, var(--surface-2) 78%, white 22%);
+    --button-primary-base: color-mix(in oklab, var(--accent) 78%, black 22%);
+
+    --border-base: var(--line-strong);
+    --border-weak-base: var(--line-soft);
+    --border-weaker-base: color-mix(in oklab, var(--line-soft) 70%, transparent);
+    --border-strong-base: color-mix(in oklab, var(--line-strong) 92%, white 8%);
+    --border-critical-base: color-mix(in oklab, var(--err) 62%, transparent);
+    --border-selected: color-mix(in oklab, var(--accent) 75%, white 25%);
+    --border-weak-selected: color-mix(in oklab, var(--accent) 35%, transparent);
+
+    --surface-critical-weak: color-mix(in oklab, var(--surface-2) 70%, var(--err) 30%);
+    --text-on-critical-base: color-mix(in oklab, var(--err) 82%, white 18%);
+
+    --icon-base: color-mix(in oklab, var(--fg) 68%, transparent);
+    --icon-disabled: color-mix(in oklab, var(--fg) 42%, transparent);
+    --icon-strong-base: color-mix(in oklab, var(--fg) 92%, transparent);
+    --icon-strong-hover: color-mix(in oklab, var(--button-primary-base) 84%, black 16%);
+    --icon-strong-focus: color-mix(in oklab, var(--button-primary-base) 80%, black 20%);
+    --icon-strong-active: color-mix(in oklab, var(--button-primary-base) 72%, black 28%);
+    --icon-strong-disabled: color-mix(in oklab, var(--button-primary-base) 36%, black 64%);
+    --icon-invert-base: color-mix(in oklab, var(--fg) 96%, white 4%);
+
+    --shadow-xs-border-base:
+      0 0 0 1px var(--border-weak-base), 0 1px 2px -1px color-mix(in oklab, black 40%, transparent),
+      0 1px 2px 0 color-mix(in oklab, black 30%, transparent);
+    --shadow-xs-border: var(--shadow-xs-border-base);
+    --shadow-xs-border-focus:
+      0 0 0 3px var(--border-weak-selected), 0 0 0 1px var(--border-selected),
+      0 1px 2px -1px color-mix(in oklab, black 42%, transparent),
+      0 1px 2px 0 color-mix(in oklab, black 32%, transparent);
+  }
+}
