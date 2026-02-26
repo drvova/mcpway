@@ -171,16 +171,19 @@ pub async fn run(
         }
 
         let runtime_args = runtime.get_effective(None).await;
+        let request_context = StreamableRequestContext {
+            http: &http,
+            url: &streamable_http_url,
+            headers: &runtime_args.headers,
+            session_id: &session_clone,
+            pool: &pool,
+            pool_key: &request_key,
+        };
         if !initialized && !is_initialize_request(&message) {
             let init_id = auto_init_id();
             let init_message = create_initialize_request(&init_id, &protocol_version);
             let init_payload = send_request(
-                &http,
-                &streamable_http_url,
-                &runtime_args.headers,
-                &session_clone,
-                &pool,
-                &request_key,
+                &request_context,
                 &init_message,
                 retry_policy,
                 &mut circuit_breaker,
@@ -191,17 +194,9 @@ pub async fn run(
                 println!("{}", response);
                 continue;
             }
-            if let Err(err) = send_initialized_notification(
-                &http,
-                &streamable_http_url,
-                &runtime_args.headers,
-                &session_clone,
-                &pool,
-                &request_key,
-                retry_policy,
-                &mut circuit_breaker,
-            )
-            .await
+            if let Err(err) =
+                send_initialized_notification(&request_context, retry_policy, &mut circuit_breaker)
+                    .await
             {
                 tracing::error!("Failed to send initialized notification: {err}");
             } else {
@@ -210,12 +205,7 @@ pub async fn run(
         }
 
         let payload = send_request(
-            &http,
-            &streamable_http_url,
-            &runtime_args.headers,
-            &session_clone,
-            &pool,
-            &request_key,
+            &request_context,
             &message,
             retry_policy,
             &mut circuit_breaker,
@@ -223,17 +213,9 @@ pub async fn run(
         .await;
 
         if is_initialize_request(&message) && payload.get("error").is_none() && !initialized {
-            if let Err(err) = send_initialized_notification(
-                &http,
-                &streamable_http_url,
-                &runtime_args.headers,
-                &session_clone,
-                &pool,
-                &request_key,
-                retry_policy,
-                &mut circuit_breaker,
-            )
-            .await
+            if let Err(err) =
+                send_initialized_notification(&request_context, retry_policy, &mut circuit_breaker)
+                    .await
             {
                 tracing::error!("Failed to send initialized notification: {err}");
             } else {
@@ -297,13 +279,17 @@ fn create_initialized_notification() -> serde_json::Value {
     })
 }
 
+struct StreamableRequestContext<'a> {
+    http: &'a reqwest::Client,
+    url: &'a str,
+    headers: &'a HeadersMap,
+    session_id: &'a Arc<RwLock<Option<String>>>,
+    pool: &'a Arc<TransportPool>,
+    pool_key: &'a str,
+}
+
 async fn send_request(
-    http: &reqwest::Client,
-    url: &str,
-    headers: &HeadersMap,
-    session_id: &Arc<RwLock<Option<String>>>,
-    pool: &Arc<TransportPool>,
-    pool_key: &str,
+    context: &StreamableRequestContext<'_>,
     message: &serde_json::Value,
     retry_policy: RetryPolicy,
     circuit_breaker: &mut CircuitBreaker,
@@ -313,14 +299,20 @@ async fn send_request(
         retry_policy,
         circuit_breaker,
         || async {
-            let mut req = apply_request_headers(http.post(url).json(message), headers);
-            if let Some(sid) = session_id.read().await.clone() {
+            let mut req = apply_request_headers(
+                context.http.post(context.url).json(message),
+                context.headers,
+            );
+            if let Some(sid) = context.session_id.read().await.clone() {
                 req = req.header("Mcp-Session-Id", sid);
             }
             let resp = req.send().await.map_err(|err| err.to_string())?;
-            pool.mark_success(pool_key, "streamable-http").await;
+            context
+                .pool
+                .mark_success(context.pool_key, "streamable-http")
+                .await;
             if let Some(sid) = extract_session_id(resp.headers()) {
-                *session_id.write().await = Some(sid.to_string());
+                *context.session_id.write().await = Some(sid.to_string());
             }
             parse_response_payload(resp).await
         },
@@ -333,12 +325,7 @@ async fn send_request(
 }
 
 async fn send_initialized_notification(
-    http: &reqwest::Client,
-    url: &str,
-    headers: &HeadersMap,
-    session_id: &Arc<RwLock<Option<String>>>,
-    pool: &Arc<TransportPool>,
-    pool_key: &str,
+    context: &StreamableRequestContext<'_>,
     retry_policy: RetryPolicy,
     circuit_breaker: &mut CircuitBreaker,
 ) -> Result<(), String> {
@@ -348,14 +335,20 @@ async fn send_initialized_notification(
         circuit_breaker,
         || async {
             let message = create_initialized_notification();
-            let mut req = apply_request_headers(http.post(url).json(&message), headers);
-            if let Some(sid) = session_id.read().await.clone() {
+            let mut req = apply_request_headers(
+                context.http.post(context.url).json(&message),
+                context.headers,
+            );
+            if let Some(sid) = context.session_id.read().await.clone() {
                 req = req.header("Mcp-Session-Id", sid);
             }
             let response = req.send().await.map_err(|err| err.to_string())?;
-            pool.mark_success(pool_key, "streamable-http").await;
+            context
+                .pool
+                .mark_success(context.pool_key, "streamable-http")
+                .await;
             if let Some(sid) = extract_session_id(response.headers()) {
-                *session_id.write().await = Some(sid.to_string());
+                *context.session_id.write().await = Some(sid.to_string());
             }
             if response.status().is_success() {
                 Ok(())
