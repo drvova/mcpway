@@ -24,7 +24,7 @@ use crate::discovery::user_home_dir;
 use crate::support::log_store::{default_log_path, ensure_log_file, parse_record, StoredLogRecord};
 use crate::support::telemetry::init_telemetry;
 
-static WEB_DIST: Dir<'_> = include_dir!("$CARGO_MANIFEST_DIR/../web/dist");
+static WEB_DIST: Dir<'_> = include_dir!("$CARGO_MANIFEST_DIR/web-dist");
 const LOG_STREAM_BUFFER: usize = 2048;
 
 #[derive(Clone)]
