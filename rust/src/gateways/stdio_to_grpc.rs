@@ -23,9 +23,12 @@ use crate::support::stdio_child::StdioChild;
 
 const GRPC_CLIENT_BUFFER: usize = 256;
 
+type GrpcEnvelopeSender = mpsc::Sender<Result<Envelope, Status>>;
+type GrpcClientMap = Arc<Mutex<HashMap<String, GrpcEnvelopeSender>>>;
+
 #[derive(Clone)]
 struct AppState {
-    clients: Arc<Mutex<HashMap<String, mpsc::Sender<Result<Envelope, Status>>>>>,
+    clients: GrpcClientMap,
     child: Arc<StdioChild>,
     seq: Arc<AtomicU64>,
     bearer_token: Option<String>,
@@ -204,7 +207,7 @@ pub async fn run(
                 continue;
             }
 
-            let senders: Vec<(String, mpsc::Sender<Result<Envelope, Status>>)> = {
+            let senders: Vec<(String, GrpcEnvelopeSender)> = {
                 let clients_guard = clients.lock().await;
                 clients_guard
                     .iter()
