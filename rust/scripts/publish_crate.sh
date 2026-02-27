@@ -40,6 +40,9 @@ if [[ "$MANIFEST_VERSION" != "$TAG_VERSION" ]]; then
   exit 1
 fi
 
+# Ensure published crate embeds latest web UI bundle.
+"$SCRIPT_DIR/sync_web_dist.sh"
+
 echo "Publishing $PACKAGE_NAME@$MANIFEST_VERSION from tag $REF_NAME"
 export CARGO_REGISTRIES_CRATES_IO_PROTOCOL=sparse
 
