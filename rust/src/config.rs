@@ -7,6 +7,9 @@ use std::path::PathBuf;
 
 use crate::types::HeadersMap;
 
+pub const DEFAULT_CONNECT_TIMEOUT_MS: u64 = 1_500;
+pub const DEFAULT_REQUEST_TIMEOUT_MS: u64 = 30_000;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
 pub enum OutputTransport {
     Stdio,
@@ -58,6 +61,9 @@ pub struct Config {
     pub retry_max_delay_ms: u64,
     pub circuit_failure_threshold: u32,
     pub circuit_cooldown_ms: u64,
+    pub connect_timeout_ms: u64,
+    pub request_timeout_ms: u64,
+    pub startup_fail_open: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -143,6 +149,9 @@ pub struct ConnectConfig {
     pub retry_max_delay_ms: u64,
     pub circuit_failure_threshold: u32,
     pub circuit_cooldown_ms: u64,
+    pub connect_timeout_ms: u64,
+    pub request_timeout_ms: u64,
+    pub startup_fail_open: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
@@ -510,6 +519,15 @@ fn parse_config_from(raw_args: Vec<String>) -> Result<Config, ConfigError> {
         .get_one::<u64>("circuit-cooldown-ms")
         .copied()
         .unwrap_or(5_000);
+    let connect_timeout_ms = matches
+        .get_one::<u64>("connect-timeout-ms")
+        .copied()
+        .unwrap_or(DEFAULT_CONNECT_TIMEOUT_MS);
+    let request_timeout_ms = matches
+        .get_one::<u64>("request-timeout-ms")
+        .copied()
+        .unwrap_or(DEFAULT_REQUEST_TIMEOUT_MS);
+    let startup_fail_open = !matches.get_flag("no-startup-fail-open");
 
     Ok(Config {
         stdio,
@@ -538,6 +556,9 @@ fn parse_config_from(raw_args: Vec<String>) -> Result<Config, ConfigError> {
         retry_max_delay_ms,
         circuit_failure_threshold,
         circuit_cooldown_ms,
+        connect_timeout_ms,
+        request_timeout_ms,
+        startup_fail_open,
     })
 }
 
@@ -676,6 +697,15 @@ fn parse_connect_config_from(raw_args: Vec<String>) -> Result<ConnectConfig, Con
         .get_one::<u64>("circuit-cooldown-ms")
         .copied()
         .unwrap_or(5_000);
+    let connect_timeout_ms = sub
+        .get_one::<u64>("connect-timeout-ms")
+        .copied()
+        .unwrap_or(DEFAULT_CONNECT_TIMEOUT_MS);
+    let request_timeout_ms = sub
+        .get_one::<u64>("request-timeout-ms")
+        .copied()
+        .unwrap_or(DEFAULT_REQUEST_TIMEOUT_MS);
+    let startup_fail_open = !sub.get_flag("no-startup-fail-open");
 
     let oauth_scopes: Vec<String> = sub
         .get_many::<String>("oauth-scope")
@@ -749,6 +779,9 @@ fn parse_connect_config_from(raw_args: Vec<String>) -> Result<ConnectConfig, Con
         retry_max_delay_ms,
         circuit_failure_threshold,
         circuit_cooldown_ms,
+        connect_timeout_ms,
+        request_timeout_ms,
+        startup_fail_open,
     })
 }
 
@@ -1075,6 +1108,31 @@ fn build_cli() -> Command {
                 .value_name("MILLISECONDS")
                 .default_value("5000"),
         )
+        .arg(
+            Arg::new("connect-timeout-ms")
+                .long("connect-timeout-ms")
+                .value_parser(clap::value_parser!(u64).range(1..))
+                .value_name("MILLISECONDS")
+                .default_value("1500"),
+        )
+        .arg(
+            Arg::new("request-timeout-ms")
+                .long("request-timeout-ms")
+                .value_parser(clap::value_parser!(u64).range(1..))
+                .value_name("MILLISECONDS")
+                .default_value("30000"),
+        )
+        .arg(
+            Arg::new("startup-fail-open")
+                .long("startup-fail-open")
+                .action(ArgAction::SetTrue)
+                .conflicts_with("no-startup-fail-open"),
+        )
+        .arg(
+            Arg::new("no-startup-fail-open")
+                .long("no-startup-fail-open")
+                .action(ArgAction::SetTrue),
+        )
 }
 
 fn build_generate_root_cli() -> Command {
@@ -1368,6 +1426,31 @@ fn build_connect_subcommand() -> Command {
                 .value_parser(clap::value_parser!(u64).range(1..))
                 .value_name("MILLISECONDS")
                 .default_value("5000"),
+        )
+        .arg(
+            Arg::new("connect-timeout-ms")
+                .long("connect-timeout-ms")
+                .value_parser(clap::value_parser!(u64).range(1..))
+                .value_name("MILLISECONDS")
+                .default_value("1500"),
+        )
+        .arg(
+            Arg::new("request-timeout-ms")
+                .long("request-timeout-ms")
+                .value_parser(clap::value_parser!(u64).range(1..))
+                .value_name("MILLISECONDS")
+                .default_value("30000"),
+        )
+        .arg(
+            Arg::new("startup-fail-open")
+                .long("startup-fail-open")
+                .action(ArgAction::SetTrue)
+                .conflicts_with("no-startup-fail-open"),
+        )
+        .arg(
+            Arg::new("no-startup-fail-open")
+                .long("no-startup-fail-open")
+                .action(ArgAction::SetTrue),
         )
         .arg(
             Arg::new("log-level")
@@ -1875,6 +1958,25 @@ mod tests {
     }
 
     #[test]
+    fn parse_runtime_startup_policy_overrides() {
+        let cfg = parse(&[
+            "mcpway",
+            "--stdio",
+            "cat",
+            "--connect-timeout-ms",
+            "2200",
+            "--request-timeout-ms",
+            "45000",
+            "--no-startup-fail-open",
+        ])
+        .expect("runtime startup policy parse failed");
+
+        assert_eq!(cfg.connect_timeout_ms, 2_200);
+        assert_eq!(cfg.request_timeout_ms, 45_000);
+        assert!(!cfg.startup_fail_open);
+    }
+
+    #[test]
     fn parse_reads_runtime_admin_host_and_token() {
         let cfg = parse(&[
             "mcpway",
@@ -1973,6 +2075,9 @@ mod tests {
                 assert_eq!(cfg.profile_name, None);
                 assert_eq!(cfg.retry_attempts, 2);
                 assert_eq!(cfg.circuit_failure_threshold, 3);
+                assert_eq!(cfg.connect_timeout_ms, DEFAULT_CONNECT_TIMEOUT_MS);
+                assert_eq!(cfg.request_timeout_ms, DEFAULT_REQUEST_TIMEOUT_MS);
+                assert!(cfg.startup_fail_open);
             }
             other => panic!("unexpected command: {other:?}"),
         }
@@ -2003,6 +2108,33 @@ mod tests {
                 assert_eq!(cfg.headers.get("X-Test"), Some(&"abc".to_string()));
                 assert_eq!(cfg.save_profile_dir, Some(PathBuf::from("./profile")));
                 assert_eq!(cfg.profile_name, Some("my-conn".to_string()));
+                assert_eq!(cfg.connect_timeout_ms, DEFAULT_CONNECT_TIMEOUT_MS);
+                assert_eq!(cfg.request_timeout_ms, DEFAULT_REQUEST_TIMEOUT_MS);
+                assert!(cfg.startup_fail_open);
+            }
+            other => panic!("unexpected command: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parse_connect_subcommand_startup_policy_overrides() {
+        let cmd = parse_cli(&[
+            "mcpway",
+            "connect",
+            "https://example.com/mcp",
+            "--connect-timeout-ms",
+            "2200",
+            "--request-timeout-ms",
+            "45000",
+            "--no-startup-fail-open",
+        ])
+        .expect("connect parse failed");
+
+        match cmd {
+            CliCommand::Connect(cfg) => {
+                assert_eq!(cfg.connect_timeout_ms, 2200);
+                assert_eq!(cfg.request_timeout_ms, 45_000);
+                assert!(!cfg.startup_fail_open);
             }
             other => panic!("unexpected command: {other:?}"),
         }

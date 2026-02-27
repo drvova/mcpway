@@ -18,11 +18,13 @@ use crate::runtime::{RuntimeApplyResult, RuntimeScope, RuntimeUpdateRequest};
 use crate::support::signals::install_signal_handlers;
 use crate::transport::pool::{global_pool, transport_fingerprint};
 
-const GRPC_CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
+const MIN_CONNECT_TIMEOUT_MS: u64 = 200;
+const MAX_CONNECT_TIMEOUT_MS: u64 = 120_000;
 
 pub async fn run(
     endpoint: String,
     protocol_version: String,
+    connect_timeout_ms: u64,
     runtime: RuntimeArgsStore,
     mut updates: mpsc::Receiver<RuntimeUpdateRequest>,
 ) -> Result<(), String> {
@@ -38,11 +40,14 @@ pub async fn run(
         &initial_runtime.headers,
         &protocol_version,
     );
+    let connect_timeout = Duration::from_millis(
+        connect_timeout_ms.clamp(MIN_CONNECT_TIMEOUT_MS, MAX_CONNECT_TIMEOUT_MS),
+    );
 
     let normalized = normalize_grpc_endpoint(&endpoint)?;
     let channel = Endpoint::from_shared(normalized)
         .map_err(|err| format!("Invalid gRPC endpoint {endpoint}: {err}"))?
-        .connect_timeout(GRPC_CONNECT_TIMEOUT)
+        .connect_timeout(connect_timeout)
         .connect()
         .await
         .map_err(|err| format!("gRPC connection failed: {err}"))?;

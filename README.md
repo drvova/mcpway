@@ -130,7 +130,7 @@ Commands:
 - `mcpway web [OPTIONS]`
 
 ### mcpway [OPTIONS]
-`--stdio` `--sse` `--streamable-http` `--output-transport` `--port` `--base-url` `--sse-path` `--message-path` `--streamable-http-path` `--log-level` `--cors` `--health-endpoint` `--header` `--env` `--oauth2-bearer` `--stateful` `--session-timeout` `--protocol-version` `--runtime-prompt` `--runtime-admin-port` `--runtime-admin-host` `--runtime-admin-token` `--retry-attempts` `--retry-base-delay-ms` `--retry-max-delay-ms` `--circuit-failure-threshold` `--circuit-cooldown-ms`
+`--stdio` `--sse` `--streamable-http` `--output-transport` `--port` `--base-url` `--sse-path` `--message-path` `--streamable-http-path` `--log-level` `--cors` `--health-endpoint` `--header` `--env` `--oauth2-bearer` `--stateful` `--session-timeout` `--protocol-version` `--runtime-prompt` `--runtime-admin-port` `--runtime-admin-host` `--runtime-admin-token` `--retry-attempts` `--retry-base-delay-ms` `--retry-max-delay-ms` `--circuit-failure-threshold` `--circuit-cooldown-ms` `--connect-timeout-ms` `--request-timeout-ms` `--startup-fail-open` `--no-startup-fail-open`
 
 ### mcpway generate
 `--definition` `--server` `--out` `--artifact-name` `--bundle-mcpway` `--no-bundle-mcpway` `--mcpway-binary` `--compile-wrapper` `--no-compile-wrapper`
@@ -139,7 +139,7 @@ Commands:
 `--metadata` `--definition` `--server` `--out` `--bundle-mcpway` `--no-bundle-mcpway` `--mcpway-binary` `--compile-wrapper` `--no-compile-wrapper`
 
 ### mcpway connect
-`--server` `--stdio-cmd` `--stdio-arg` `--stdio-env` `--stdio-wrapper` `--save-wrapper` `--protocol` `--header` `--oauth2-bearer` `--oauth-profile` `--oauth-issuer` `--oauth-client-id` `--oauth-scope` `--oauth-flow` `--oauth-no-browser` `--oauth-cache` `--oauth-login` `--oauth-logout` `--oauth-audience` `--save-profile` `--registry` `--profile-name` `--retry-attempts` `--retry-base-delay-ms` `--retry-max-delay-ms` `--circuit-failure-threshold` `--circuit-cooldown-ms` `--log-level` `--protocol-version`
+`--server` `--stdio-cmd` `--stdio-arg` `--stdio-env` `--stdio-wrapper` `--save-wrapper` `--protocol` `--header` `--oauth2-bearer` `--oauth-profile` `--oauth-issuer` `--oauth-client-id` `--oauth-scope` `--oauth-flow` `--oauth-no-browser` `--oauth-cache` `--oauth-login` `--oauth-logout` `--oauth-audience` `--save-profile` `--registry` `--profile-name` `--retry-attempts` `--retry-base-delay-ms` `--retry-max-delay-ms` `--circuit-failure-threshold` `--circuit-cooldown-ms` `--connect-timeout-ms` `--request-timeout-ms` `--startup-fail-open` `--no-startup-fail-open` `--log-level` `--protocol-version`
 
 ### mcpway discover
 `--from` `--project-root` `--json` `--strict-conflicts` `--search` `--transport` `--scope` `--enabled-only` `--sort` `--order` `--offset` `--limit`

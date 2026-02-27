@@ -11,11 +11,13 @@ use crate::runtime::{RuntimeApplyResult, RuntimeScope, RuntimeUpdateRequest};
 use crate::support::signals::install_signal_handlers;
 use crate::transport::pool::{global_pool, transport_fingerprint};
 
-const WS_CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
+const MIN_CONNECT_TIMEOUT_MS: u64 = 200;
+const MAX_CONNECT_TIMEOUT_MS: u64 = 120_000;
 
 pub async fn run(
     endpoint: String,
     protocol_version: String,
+    connect_timeout_ms: u64,
     runtime: RuntimeArgsStore,
     mut updates: mpsc::Receiver<RuntimeUpdateRequest>,
 ) -> Result<(), String> {
@@ -28,18 +30,19 @@ pub async fn run(
     let warm_key =
         transport_fingerprint("ws", &endpoint, &initial_runtime.headers, &protocol_version);
     let request = build_ws_request(&endpoint, &initial_runtime.headers)?;
-    let (stream, _) = tokio::time::timeout(
-        WS_CONNECT_TIMEOUT,
-        tokio_tungstenite::connect_async(request),
-    )
-    .await
-    .map_err(|_| {
-        format!(
-            "Timed out connecting to WebSocket endpoint after {}ms",
-            WS_CONNECT_TIMEOUT.as_millis()
-        )
-    })?
-    .map_err(|err| format!("WebSocket connection failed: {err}"))?;
+    let connect_timeout = Duration::from_millis(
+        connect_timeout_ms.clamp(MIN_CONNECT_TIMEOUT_MS, MAX_CONNECT_TIMEOUT_MS),
+    );
+    let (stream, _) =
+        tokio::time::timeout(connect_timeout, tokio_tungstenite::connect_async(request))
+            .await
+            .map_err(|_| {
+                format!(
+                    "Timed out connecting to WebSocket endpoint after {}ms",
+                    connect_timeout.as_millis()
+                )
+            })?
+            .map_err(|err| format!("WebSocket connection failed: {err}"))?;
     global_pool().mark_success(&warm_key, "ws").await;
 
     let runtime_store = runtime.clone();

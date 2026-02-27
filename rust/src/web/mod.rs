@@ -33,6 +33,14 @@ const LOG_STREAM_BUFFER: usize = 2048;
 const INSPECT_MAX_SESSIONS: usize = 64;
 const INSPECT_MAX_HISTORY_PER_SESSION: usize = 400;
 const INSPECT_DEFAULT_PROTOCOL_VERSION: &str = "2024-11-05";
+const INSPECT_DEFAULT_CONNECT_TIMEOUT_MS: u64 = 1_500;
+const INSPECT_DEFAULT_REQUEST_TIMEOUT_MS: u64 = 30_000;
+const INSPECT_MIN_CONNECT_TIMEOUT_MS: u64 = 200;
+const INSPECT_MAX_CONNECT_TIMEOUT_MS: u64 = 120_000;
+const INSPECT_MIN_REQUEST_TIMEOUT_MS: u64 = 200;
+const INSPECT_MAX_REQUEST_TIMEOUT_MS: u64 = 300_000;
+const INSPECT_RETRY_INITIAL_DELAY: Duration = Duration::from_millis(500);
+const INSPECT_RETRY_MAX_DELAY: Duration = Duration::from_secs(5);
 
 #[derive(Clone)]
 struct AppState {
@@ -266,6 +274,7 @@ struct InspectConnectRequest {
     session_name: Option<String>,
     connect_timeout_ms: Option<u64>,
     request_timeout_ms: Option<u64>,
+    startup_fail_open: Option<bool>,
 }
 
 #[derive(Debug, Serialize)]
@@ -483,6 +492,7 @@ impl InspectManager {
             session_name: session_name_input,
             connect_timeout_ms: connect_timeout_ms_input,
             request_timeout_ms: request_timeout_ms_input,
+            startup_fail_open,
         } = request;
 
         let transport = parse_inspect_transport(transport_raw.as_str())
@@ -531,15 +541,26 @@ impl InspectManager {
         }
 
         let connect_timeout_ms = connect_timeout_ms_input
-            .unwrap_or(10_000)
-            .clamp(200, 120_000);
-        let request_timeout = request_timeout_ms_input.map(|ms| {
-            if ms == 0 {
-                None
-            } else {
-                Some(Duration::from_millis(ms.clamp(200, 300_000)))
-            }
-        });
+            .unwrap_or(INSPECT_DEFAULT_CONNECT_TIMEOUT_MS)
+            .clamp(
+                INSPECT_MIN_CONNECT_TIMEOUT_MS,
+                INSPECT_MAX_CONNECT_TIMEOUT_MS,
+            );
+        let request_timeout = request_timeout_ms_input
+            .map(|ms| {
+                if ms == 0 {
+                    None
+                } else {
+                    Some(Duration::from_millis(ms.clamp(
+                        INSPECT_MIN_REQUEST_TIMEOUT_MS,
+                        INSPECT_MAX_REQUEST_TIMEOUT_MS,
+                    )))
+                }
+            })
+            .unwrap_or(Some(Duration::from_millis(
+                INSPECT_DEFAULT_REQUEST_TIMEOUT_MS,
+            )));
+        let startup_fail_open = startup_fail_open.unwrap_or(true);
         let protocol_version = protocol_version_input
             .as_deref()
             .unwrap_or(INSPECT_DEFAULT_PROTOCOL_VERSION)
@@ -579,7 +600,7 @@ impl InspectManager {
             builder = builder.headers(headers);
         }
         if let Some(timeout) = request_timeout {
-            builder = builder.request_timeout(timeout);
+            builder = builder.request_timeout(Some(timeout));
         }
         let client = builder.build().map_err(|err| {
             (
@@ -588,8 +609,13 @@ impl InspectManager {
             )
         })?;
 
-        let tools_count = match client.refresh_tools().await {
-            Ok(()) => client.tools().list().await.len(),
+        let mut tools_count = 0usize;
+        let degraded_error = match client.refresh_tools().await {
+            Ok(()) => {
+                tools_count = client.tools().list().await.len();
+                None
+            }
+            Err(err) if startup_fail_open => Some(err.to_string()),
             Err(err) => {
                 return Err((
                     status_for_tool_error(&err),
@@ -613,11 +639,27 @@ impl InspectManager {
             self.max_history_per_session,
             client,
         ));
-        session
-            .push_history("session.connect", "Session connected", None, None, None)
-            .await;
+        if let Some(err) = degraded_error.as_deref() {
+            session.mark_degraded_connecting(err.to_string()).await;
+            session
+                .push_history(
+                    "session.connect.degraded",
+                    "Session created; initial handshake deferred",
+                    None,
+                    Some(serde_json::json!({ "error": err })),
+                    Some(err.to_string()),
+                )
+                .await;
+        } else {
+            session
+                .push_history("session.connect", "Session connected", None, None, None)
+                .await;
+        }
 
         self.insert_session(session.clone()).await?;
+        if degraded_error.is_some() {
+            tokio::spawn(refresh_tools_in_background(session.clone()));
+        }
         let summary = session.summary().await;
 
         Ok(InspectConnectResponse {
@@ -814,10 +856,22 @@ impl InspectSession {
         state.updated_at_utc = unix_timestamp_secs();
     }
 
+    async fn mark_degraded_connecting(&self, err: String) {
+        let mut state = self.state.lock().await;
+        state.status = "degraded_connecting".to_string();
+        state.last_error = Some(err);
+        state.updated_at_utc = unix_timestamp_secs();
+    }
+
     async fn mark_disconnected(&self) {
         let mut state = self.state.lock().await;
         state.status = "disconnected".to_string();
         state.updated_at_utc = unix_timestamp_secs();
+    }
+
+    async fn is_disconnected(&self) -> bool {
+        let state = self.state.lock().await;
+        state.status == "disconnected"
     }
 
     async fn push_history(
@@ -923,6 +977,43 @@ fn parse_inspect_transport(raw: &str) -> Result<InspectTransportKind, String> {
 
 fn default_session_name(transport: InspectTransportKind, endpoint: &str) -> String {
     format!("{}:{}", transport.as_str(), endpoint)
+}
+
+async fn refresh_tools_in_background(session: Arc<InspectSession>) {
+    let mut delay = INSPECT_RETRY_INITIAL_DELAY;
+    loop {
+        if session.is_disconnected().await {
+            return;
+        }
+
+        match session.client.refresh_tools().await {
+            Ok(()) => {
+                let tool_count = session.client.tools().list().await.len();
+                session.mark_connected().await;
+                session
+                    .push_history(
+                        "session.connect.recovered",
+                        format!("Background handshake succeeded with {tool_count} tools"),
+                        None,
+                        Some(serde_json::json!({ "tools_count": tool_count })),
+                        None,
+                    )
+                    .await;
+                return;
+            }
+            Err(err) => {
+                session.mark_degraded_connecting(err.to_string()).await;
+                tracing::debug!("Background inspect handshake retry failed: {err}");
+            }
+        }
+
+        tokio::time::sleep(delay).await;
+        let next_delay = delay
+            .checked_mul(2)
+            .map(|value| std::cmp::min(value, INSPECT_RETRY_MAX_DELAY))
+            .unwrap_or(INSPECT_RETRY_MAX_DELAY);
+        delay = next_delay;
+    }
 }
 
 fn empty_json_object() -> Value {

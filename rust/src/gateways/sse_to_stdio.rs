@@ -18,9 +18,10 @@ use crate::transport::reliability::{
 };
 use crate::types::HeadersMap;
 
-const ENDPOINT_WAIT_TIMEOUT: Duration = Duration::from_secs(10);
-const HTTP_CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
-const HTTP_REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
+const MIN_CONNECT_TIMEOUT_MS: u64 = 200;
+const MAX_CONNECT_TIMEOUT_MS: u64 = 120_000;
+const MIN_REQUEST_TIMEOUT_MS: u64 = 200;
+const MAX_REQUEST_TIMEOUT_MS: u64 = 300_000;
 
 pub async fn run(
     config: Config,
@@ -48,10 +49,25 @@ pub async fn run(
     let request_key = transport_fingerprint("sse-request", &sse_url, &headers, &protocol_version);
     let sse_pool = pool.clone();
     let sse_key_clone = sse_key.clone();
+    let connect_timeout = Duration::from_millis(
+        config
+            .connect_timeout_ms
+            .clamp(MIN_CONNECT_TIMEOUT_MS, MAX_CONNECT_TIMEOUT_MS),
+    );
+    let request_timeout = Duration::from_millis(
+        config
+            .request_timeout_ms
+            .clamp(MIN_REQUEST_TIMEOUT_MS, MAX_REQUEST_TIMEOUT_MS),
+    );
+    let endpoint_wait_timeout = if config.startup_fail_open {
+        connect_timeout
+    } else {
+        Duration::from_secs(10).max(connect_timeout)
+    };
 
     tokio::spawn(async move {
         let client = match sse_pool
-            .http_client(&sse_key_clone, HTTP_CONNECT_TIMEOUT, None)
+            .http_client(&sse_key_clone, connect_timeout, None)
             .await
         {
             Ok(client) => client,
@@ -127,11 +143,7 @@ pub async fn run(
     let stdin = tokio::io::stdin();
     let mut lines = FramedRead::new(stdin, LinesCodec::new());
     let http = pool
-        .http_client(
-            &request_key,
-            HTTP_CONNECT_TIMEOUT,
-            Some(HTTP_REQUEST_TIMEOUT),
-        )
+        .http_client(&request_key, connect_timeout, Some(request_timeout))
         .await?;
     let retry_policy = RetryPolicy {
         max_retries: config.retry_attempts,
@@ -159,14 +171,15 @@ pub async fn run(
             continue;
         }
 
-        let endpoint = match wait_for_message_endpoint(&message_endpoint).await {
-            Ok(endpoint) => endpoint,
-            Err(err) => {
-                let response = wrap_response(&message, error_payload(-32000, err));
-                println!("{}", response);
-                continue;
-            }
-        };
+        let endpoint =
+            match wait_for_message_endpoint(&message_endpoint, endpoint_wait_timeout).await {
+                Ok(endpoint) => endpoint,
+                Err(err) => {
+                    let response = wrap_response(&message, error_payload(-32000, err));
+                    println!("{}", response);
+                    continue;
+                }
+            };
 
         let runtime_args = runtime_clone.get_effective(None).await;
         let request_context = SseRequestContext {
@@ -229,8 +242,9 @@ pub async fn run(
 
 async fn wait_for_message_endpoint(
     message_endpoint: &Arc<RwLock<Option<Url>>>,
+    timeout: Duration,
 ) -> Result<Url, String> {
-    let deadline = Instant::now() + ENDPOINT_WAIT_TIMEOUT;
+    let deadline = Instant::now() + timeout;
     loop {
         if let Some(url) = message_endpoint.read().await.clone() {
             return Ok(url);
@@ -238,7 +252,7 @@ async fn wait_for_message_endpoint(
         if Instant::now() >= deadline {
             return Err(format!(
                 "Timed out waiting for SSE endpoint after {}ms",
-                ENDPOINT_WAIT_TIMEOUT.as_millis()
+                timeout.as_millis()
             ));
         }
         tokio::time::sleep(Duration::from_millis(50)).await;

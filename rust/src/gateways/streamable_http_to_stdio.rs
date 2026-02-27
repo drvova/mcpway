@@ -17,8 +17,10 @@ use crate::transport::reliability::{
 };
 use crate::types::HeadersMap;
 
-const HTTP_CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
-const HTTP_REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
+const MIN_CONNECT_TIMEOUT_MS: u64 = 200;
+const MAX_CONNECT_TIMEOUT_MS: u64 = 120_000;
+const MIN_REQUEST_TIMEOUT_MS: u64 = 200;
+const MAX_REQUEST_TIMEOUT_MS: u64 = 300_000;
 const SSE_WAIT_FOR_SESSION_DELAY: Duration = Duration::from_millis(200);
 const SSE_RETRY_INITIAL_DELAY: Duration = Duration::from_millis(500);
 const SSE_RETRY_MAX_DELAY: Duration = Duration::from_secs(30);
@@ -419,15 +421,19 @@ pub async fn run(
         &headers,
         &protocol_version,
     );
-    let sse_http = pool
-        .http_client(&sse_key, HTTP_CONNECT_TIMEOUT, None)
-        .await?;
+    let connect_timeout = Duration::from_millis(
+        config
+            .connect_timeout_ms
+            .clamp(MIN_CONNECT_TIMEOUT_MS, MAX_CONNECT_TIMEOUT_MS),
+    );
+    let request_timeout = Duration::from_millis(
+        config
+            .request_timeout_ms
+            .clamp(MIN_REQUEST_TIMEOUT_MS, MAX_REQUEST_TIMEOUT_MS),
+    );
+    let sse_http = pool.http_client(&sse_key, connect_timeout, None).await?;
     let http = pool
-        .http_client(
-            &request_key,
-            HTTP_CONNECT_TIMEOUT,
-            Some(HTTP_REQUEST_TIMEOUT),
-        )
+        .http_client(&request_key, connect_timeout, Some(request_timeout))
         .await?;
     let session_clone = session_id.clone();
     let runtime_clone = runtime.clone();

@@ -6,7 +6,7 @@ use crate::tool_api::error::ToolCallError;
 use crate::tool_api::transport::{Transport, TransportClient, TransportOptions};
 
 const DEFAULT_PROTOCOL_VERSION: &str = "2024-11-05";
-const DEFAULT_CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
+const DEFAULT_CONNECT_TIMEOUT: Duration = Duration::from_millis(1_500);
 const DEFAULT_REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 
 pub struct ToolClientBuilder {
