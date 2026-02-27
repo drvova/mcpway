@@ -60,6 +60,9 @@ mcpway --sse https://example.com/sse
 
 # streamable-http -> stdio
 mcpway --streamable-http https://example.com/mcp
+
+# streamable-http -> stdio with auth header (format is "Key: Value")
+mcpway --streamable-http https://api.z.ai/api/mcp/web_search_prime/mcp --header "Authorization: Bearer $ZAI_API_KEY"
 ```
 
 For endpoint-first usage, use `connect`:
