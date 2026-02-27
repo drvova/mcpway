@@ -141,18 +141,25 @@ Commands:
 `--file` `--lines` `--level` `--transport` `--json` `--no-follow`
 
 ### mcpway web
-`--host` `--port` `--log-file` `--admin-base-url` `--admin-token` `--auth-token` `--theme-catalog-url` `--theme-cache-ttl-seconds` `--theme-cache-file` `--no-open-browser` `--log-level`
+`--host` `--port` `--hot-reload` `--hot-reload-port` `--log-file` `--admin-base-url` `--admin-token` `--auth-token` `--theme-catalog-url` `--theme-cache-ttl-seconds` `--theme-cache-file` `--no-open-browser` `--log-level`
 
 Starts a minimal MCPway web inspector with:
 - Live log stream over WebSocket (`/api/logs/ws`) and recent log query (`/api/logs/recent`)
 - Optional runtime admin proxy panels (`/api/runtime/*`, `/api/discovery/search`)
 - Theme catalog support for iTerm2-style schemes (`/api/themes/catalog`, `/api/themes/refresh`)
 - Automatic browser launch when a graphical session is detected (or disable explicitly with `--no-open-browser`)
+- Optional Vite-driven hot reload mode for local UI development (`--hot-reload`)
 
 Examples:
 ```bash
 # local-only web inspector (default bind 127.0.0.1:5173)
 mcpway web
+
+# enable frontend hot reload (serves UI via Vite dev server, API via mcpway)
+mcpway web --hot-reload
+
+# choose a custom Vite HMR port (must differ from --port)
+mcpway web --hot-reload --hot-reload-port 5174
 
 # use a specific log file and runtime admin endpoint
 mcpway web --log-file ~/.mcpway/logs/mcpway.ndjson --admin-base-url http://127.0.0.1:9101
