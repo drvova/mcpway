@@ -446,13 +446,13 @@ impl InspectTransportKind {
         }
     }
 
-    fn to_tool_transport(self) -> Option<Transport> {
+    fn to_tool_transport(self) -> Transport {
         match self {
-            Self::Stdio => None,
-            Self::StreamableHttp => Some(Transport::StreamableHttp),
-            Self::Sse => Some(Transport::Sse),
-            Self::Ws => Some(Transport::Ws),
-            Self::Grpc => Some(Transport::Grpc),
+            Self::Stdio => Transport::Stdio,
+            Self::StreamableHttp => Transport::StreamableHttp,
+            Self::Sse => Transport::Sse,
+            Self::Ws => Transport::Ws,
+            Self::Grpc => Transport::Grpc,
         }
     }
 }
@@ -471,39 +471,51 @@ impl InspectManager {
         &self,
         request: InspectConnectRequest,
     ) -> Result<InspectConnectResponse, (StatusCode, String)> {
-        let transport = parse_inspect_transport(request.transport.as_str())
-            .map_err(|message| (StatusCode::BAD_REQUEST, message))?;
-        if matches!(transport, InspectTransportKind::Stdio) {
-            let command = request
-                .command
-                .as_deref()
-                .map(str::trim)
-                .filter(|value| !value.is_empty());
-            let args_count = request.args.len();
-            let env_count = request.env.len();
-            let cwd = request.cwd.as_deref().unwrap_or("");
-            return Err((
-                StatusCode::NOT_IMPLEMENTED,
-                format!(
-                    "stdio transport is not available yet for web inspector (command='{}', args={args_count}, env={env_count}, cwd='{}'). Use streamable-http, sse, ws, or grpc.",
-                    command.unwrap_or(""),
-                    cwd
-                ),
-            ));
-        }
+        let InspectConnectRequest {
+            transport: transport_raw,
+            endpoint: endpoint_input,
+            command: command_input,
+            args,
+            env,
+            cwd,
+            headers: request_headers,
+            protocol_version: protocol_version_input,
+            session_name: session_name_input,
+            connect_timeout_ms: connect_timeout_ms_input,
+            request_timeout_ms: request_timeout_ms_input,
+        } = request;
 
-        let endpoint = request
-            .endpoint
+        let transport = parse_inspect_transport(transport_raw.as_str())
+            .map_err(|message| (StatusCode::BAD_REQUEST, message))?;
+
+        let stdio_command = command_input
             .as_deref()
             .map(str::trim)
             .filter(|value| !value.is_empty())
-            .map(str::to_string)
-            .ok_or_else(|| {
+            .map(str::to_string);
+        let stdio_cwd = cwd.and_then(non_empty_string);
+
+        let endpoint = if matches!(transport, InspectTransportKind::Stdio) {
+            let command = stdio_command.clone().ok_or_else(|| {
                 (
                     StatusCode::BAD_REQUEST,
-                    "endpoint cannot be empty for non-stdio transports".to_string(),
+                    "stdio transport requires a non-empty command".to_string(),
                 )
             })?;
+            format!("stdio:{command}")
+        } else {
+            endpoint_input
+                .as_deref()
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(str::to_string)
+                .ok_or_else(|| {
+                    (
+                        StatusCode::BAD_REQUEST,
+                        "endpoint cannot be empty for non-stdio transports".to_string(),
+                    )
+                })?
+        };
 
         {
             let sessions = self.sessions.lock().await;
@@ -518,19 +530,17 @@ impl InspectManager {
             }
         }
 
-        let connect_timeout_ms = request
-            .connect_timeout_ms
+        let connect_timeout_ms = connect_timeout_ms_input
             .unwrap_or(10_000)
             .clamp(200, 120_000);
-        let request_timeout = request.request_timeout_ms.map(|ms| {
+        let request_timeout = request_timeout_ms_input.map(|ms| {
             if ms == 0 {
                 None
             } else {
                 Some(Duration::from_millis(ms.clamp(200, 300_000)))
             }
         });
-        let protocol_version = request
-            .protocol_version
+        let protocol_version = protocol_version_input
             .as_deref()
             .unwrap_or(INSPECT_DEFAULT_PROTOCOL_VERSION)
             .trim();
@@ -542,7 +552,7 @@ impl InspectManager {
         }
 
         let mut headers = HashMap::new();
-        for (key, value) in request.headers {
+        for (key, value) in request_headers {
             let key = key.trim();
             if key.is_empty() {
                 continue;
@@ -550,17 +560,24 @@ impl InspectManager {
             headers.insert(key.to_string(), value);
         }
 
-        let transport_kind = transport.to_tool_transport().ok_or_else(|| {
-            (
-                StatusCode::NOT_IMPLEMENTED,
-                "unsupported inspect transport for tool client".to_string(),
-            )
-        })?;
-
-        let mut builder = ToolClientBuilder::new(endpoint.clone(), transport_kind)
+        let mut builder = ToolClientBuilder::new(endpoint.clone(), transport.to_tool_transport())
             .protocol_version(protocol_version.to_string())
-            .headers(headers)
             .connect_timeout(Duration::from_millis(connect_timeout_ms));
+        if matches!(transport, InspectTransportKind::Stdio) {
+            let command = stdio_command.ok_or_else(|| {
+                (
+                    StatusCode::BAD_REQUEST,
+                    "stdio transport requires a non-empty command".to_string(),
+                )
+            })?;
+            builder = builder
+                .stdio_command(command)
+                .stdio_args(args)
+                .stdio_env(env)
+                .stdio_cwd(stdio_cwd);
+        } else {
+            builder = builder.headers(headers);
+        }
         if let Some(timeout) = request_timeout {
             builder = builder.request_timeout(timeout);
         }
@@ -582,8 +599,7 @@ impl InspectManager {
         };
 
         let session_id = self.next_session_id();
-        let session_name = request
-            .session_name
+        let session_name = session_name_input
             .as_deref()
             .map(str::trim)
             .filter(|name| !name.is_empty())

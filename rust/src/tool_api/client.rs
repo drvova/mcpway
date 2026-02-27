@@ -428,6 +428,7 @@ mod tests {
                     headers: HashMap::new(),
                     connect_timeout: std::time::Duration::from_secs(1),
                     request_timeout: Some(std::time::Duration::from_secs(1)),
+                    ..Default::default()
                 },
             )
             .expect("transport init"),
