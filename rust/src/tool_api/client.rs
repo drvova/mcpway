@@ -118,6 +118,18 @@ impl ToolClient {
         self.call_tool(&metadata, args).await
     }
 
+    pub async fn request(&self, method: &str, params: Value) -> Result<Value, ToolCallError> {
+        let mut state = self.state.lock().await;
+        state.ensure_initialized().await?;
+        state.send_jsonrpc_request(method, params).await
+    }
+
+    pub async fn notify(&self, method: &str, params: Value) -> Result<(), ToolCallError> {
+        let mut state = self.state.lock().await;
+        state.ensure_initialized().await?;
+        state.send_jsonrpc_notification(method, params).await
+    }
+
     async fn call_tool(
         &self,
         metadata: &ToolMetadata,
@@ -217,6 +229,19 @@ impl ClientState {
         let response = self.transport.send_request(&request).await?;
         ensure_no_rpc_error(method, &response)?;
         Ok(response)
+    }
+
+    async fn send_jsonrpc_notification(
+        &mut self,
+        method: &str,
+        params: Value,
+    ) -> Result<(), ToolCallError> {
+        let notification = json!({
+            "jsonrpc": "2.0",
+            "method": method,
+            "params": params,
+        });
+        self.transport.send_notification(&notification).await
     }
 
     fn resolve_tool(&self, name: &str) -> Result<ToolMetadata, ToolCallError> {
