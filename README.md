@@ -105,6 +105,13 @@ cargo run -p mcpway -- --stdio "./my-mcp-server --root ." --output-transport grp
 cargo run -p mcpway -- connect https://example.com/mcp --oauth-login
 ```
 
+Before publishing to crates.io, sync the embedded web bundle used by packaged builds:
+
+```bash
+(cd web && npm ci && npm run build)
+./rust/scripts/sync_web_dist.sh
+```
+
 ## Command Reference
 
 Shortcuts:
