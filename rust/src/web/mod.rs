@@ -1,11 +1,12 @@
-use std::collections::VecDeque;
+use std::collections::{HashMap, VecDeque};
 use std::fs::File;
 use std::io::{Read, Seek, SeekFrom};
 use std::net::{IpAddr, SocketAddr};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
 use axum::extract::{Query, Request, State};
@@ -25,9 +26,13 @@ use crate::discovery::user_home_dir;
 use crate::support::browser_launch::{should_attempt_browser_launch, try_open_browser};
 use crate::support::log_store::{default_log_path, ensure_log_file, parse_record, StoredLogRecord};
 use crate::support::telemetry::init_telemetry;
+use mcpway::tool_api::{ToolCallError, ToolClient, ToolClientBuilder, ToolMetadata, Transport};
 
 static WEB_DIST: Dir<'_> = include_dir!("$OUT_DIR/web-dist");
 const LOG_STREAM_BUFFER: usize = 2048;
+const INSPECT_MAX_SESSIONS: usize = 64;
+const INSPECT_MAX_HISTORY_PER_SESSION: usize = 400;
+const INSPECT_DEFAULT_PROTOCOL_VERSION: &str = "2024-11-05";
 
 #[derive(Clone)]
 struct AppState {
@@ -36,6 +41,7 @@ struct AppState {
     auth_token: Option<String>,
     admin_proxy: Option<AdminProxy>,
     themes: ThemeService,
+    inspect: InspectManager,
     hot_reload_url: Option<String>,
 }
 
@@ -153,6 +159,551 @@ struct LogsRecentQuery {
     search: Option<String>,
 }
 
+#[derive(Clone)]
+struct InspectManager {
+    sessions: Arc<Mutex<HashMap<String, Arc<InspectSession>>>>,
+    max_sessions: usize,
+    max_history_per_session: usize,
+    session_seq: Arc<AtomicU64>,
+}
+
+struct InspectSession {
+    id: String,
+    name: String,
+    transport: InspectTransportKind,
+    endpoint: String,
+    created_at_utc: u64,
+    state: Arc<Mutex<InspectSessionState>>,
+    history: Arc<Mutex<VecDeque<InspectHistoryEntry>>>,
+    history_seq: AtomicU64,
+    max_history_entries: usize,
+    client: ToolClient,
+}
+
+#[derive(Debug, Clone)]
+struct InspectSessionState {
+    status: String,
+    last_error: Option<String>,
+    updated_at_utc: u64,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct InspectSessionSummary {
+    session_id: String,
+    session_name: String,
+    transport: String,
+    endpoint: String,
+    status: String,
+    last_error: Option<String>,
+    connected_at_utc: u64,
+    updated_at_utc: u64,
+    history_size: usize,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct InspectHistoryEntry {
+    id: String,
+    ts_utc: u64,
+    kind: String,
+    summary: String,
+    request: Option<Value>,
+    response: Option<Value>,
+    error: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct InspectToolDescriptor {
+    name: String,
+    description: Option<String>,
+    input_schema: Value,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct InspectToolsListResponse {
+    session_id: String,
+    tool_count: usize,
+    duration_ms: u128,
+    tools: Vec<InspectToolDescriptor>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct InspectToolCallResponse {
+    session_id: String,
+    tool_name: String,
+    started_at_utc: u64,
+    duration_ms: u128,
+    result: Value,
+}
+
+#[derive(Debug, Deserialize)]
+struct InspectConnectRequest {
+    transport: String,
+    endpoint: String,
+    #[serde(default)]
+    headers: HashMap<String, String>,
+    protocol_version: Option<String>,
+    session_name: Option<String>,
+    connect_timeout_ms: Option<u64>,
+    request_timeout_ms: Option<u64>,
+}
+
+#[derive(Debug, Serialize)]
+struct InspectConnectResponse {
+    session: InspectSessionSummary,
+    tools_count: usize,
+}
+
+#[derive(Debug, Deserialize)]
+struct InspectDisconnectRequest {
+    session_id: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct InspectToolsListRequest {
+    session_id: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct InspectToolCallRequest {
+    session_id: String,
+    tool_name: String,
+    #[serde(default = "empty_json_object")]
+    arguments: Value,
+}
+
+#[derive(Debug, Deserialize)]
+struct InspectSessionQuery {
+    session_id: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct InspectHistoryQuery {
+    session_id: String,
+    limit: Option<usize>,
+}
+
+#[derive(Debug, Serialize)]
+struct InspectHistoryResponse {
+    session_id: String,
+    count: usize,
+    entries: Vec<InspectHistoryEntry>,
+}
+
+#[derive(Debug, Serialize)]
+struct InspectDisconnectResponse {
+    session_id: String,
+    disconnected: bool,
+}
+
+#[derive(Debug, Serialize)]
+struct InspectHistoryClearResponse {
+    session_id: String,
+    cleared: usize,
+}
+
+#[derive(Debug, Clone, Copy)]
+enum InspectTransportKind {
+    StreamableHttp,
+    Sse,
+    Ws,
+    Grpc,
+}
+
+impl InspectTransportKind {
+    fn as_str(&self) -> &'static str {
+        match self {
+            Self::StreamableHttp => "streamable-http",
+            Self::Sse => "sse",
+            Self::Ws => "ws",
+            Self::Grpc => "grpc",
+        }
+    }
+
+    fn to_tool_transport(self) -> Transport {
+        match self {
+            Self::StreamableHttp => Transport::StreamableHttp,
+            Self::Sse => Transport::Sse,
+            Self::Ws => Transport::Ws,
+            Self::Grpc => Transport::Grpc,
+        }
+    }
+}
+
+impl InspectManager {
+    fn new(max_sessions: usize, max_history_per_session: usize) -> Self {
+        Self {
+            sessions: Arc::new(Mutex::new(HashMap::new())),
+            max_sessions: max_sessions.max(1),
+            max_history_per_session: max_history_per_session.max(1),
+            session_seq: Arc::new(AtomicU64::new(0)),
+        }
+    }
+
+    async fn connect(
+        &self,
+        request: InspectConnectRequest,
+    ) -> Result<InspectConnectResponse, (StatusCode, String)> {
+        let transport = parse_inspect_transport(request.transport.as_str())
+            .map_err(|message| (StatusCode::BAD_REQUEST, message))?;
+        let endpoint = request.endpoint.trim().to_string();
+        if endpoint.is_empty() {
+            return Err((
+                StatusCode::BAD_REQUEST,
+                "endpoint cannot be empty".to_string(),
+            ));
+        }
+
+        {
+            let sessions = self.sessions.lock().await;
+            if sessions.len() >= self.max_sessions {
+                return Err((
+                    StatusCode::CONFLICT,
+                    format!(
+                        "inspect session limit reached ({}). Disconnect a session before connecting a new one.",
+                        self.max_sessions
+                    ),
+                ));
+            }
+        }
+
+        let connect_timeout_ms = request
+            .connect_timeout_ms
+            .unwrap_or(10_000)
+            .clamp(200, 120_000);
+        let request_timeout = request.request_timeout_ms.map(|ms| {
+            if ms == 0 {
+                None
+            } else {
+                Some(Duration::from_millis(ms.clamp(200, 300_000)))
+            }
+        });
+        let protocol_version = request
+            .protocol_version
+            .as_deref()
+            .unwrap_or(INSPECT_DEFAULT_PROTOCOL_VERSION)
+            .trim();
+        if protocol_version.is_empty() {
+            return Err((
+                StatusCode::BAD_REQUEST,
+                "protocol_version cannot be empty when provided".to_string(),
+            ));
+        }
+
+        let mut headers = HashMap::new();
+        for (key, value) in request.headers {
+            let key = key.trim();
+            if key.is_empty() {
+                continue;
+            }
+            headers.insert(key.to_string(), value);
+        }
+
+        let mut builder = ToolClientBuilder::new(endpoint.clone(), transport.to_tool_transport())
+            .protocol_version(protocol_version.to_string())
+            .headers(headers)
+            .connect_timeout(Duration::from_millis(connect_timeout_ms));
+        if let Some(timeout) = request_timeout {
+            builder = builder.request_timeout(timeout);
+        }
+        let client = builder.build().map_err(|err| {
+            (
+                StatusCode::BAD_REQUEST,
+                format!("inspect connect failed: {err}"),
+            )
+        })?;
+
+        let tools_count = match client.refresh_tools().await {
+            Ok(()) => client.tools().list().await.len(),
+            Err(err) => {
+                return Err((
+                    status_for_tool_error(&err),
+                    format!("inspect handshake failed: {err}"),
+                ))
+            }
+        };
+
+        let session_id = self.next_session_id();
+        let session_name = request
+            .session_name
+            .as_deref()
+            .map(str::trim)
+            .filter(|name| !name.is_empty())
+            .map(str::to_string)
+            .unwrap_or_else(|| default_session_name(transport, endpoint.as_str()));
+        let session = Arc::new(InspectSession::new(
+            session_id.clone(),
+            session_name,
+            transport,
+            endpoint,
+            self.max_history_per_session,
+            client,
+        ));
+        session
+            .push_history("session.connect", "Session connected", None, None, None)
+            .await;
+
+        self.insert_session(session.clone()).await?;
+        let summary = session.summary().await;
+
+        Ok(InspectConnectResponse {
+            session: summary,
+            tools_count,
+        })
+    }
+
+    async fn insert_session(
+        &self,
+        session: Arc<InspectSession>,
+    ) -> Result<(), (StatusCode, String)> {
+        let mut sessions = self.sessions.lock().await;
+        if sessions.len() >= self.max_sessions {
+            return Err((
+                StatusCode::CONFLICT,
+                format!(
+                    "inspect session limit reached ({}). Disconnect a session before connecting a new one.",
+                    self.max_sessions
+                ),
+            ));
+        }
+        sessions.insert(session.id.clone(), session);
+        Ok(())
+    }
+
+    async fn session_count(&self) -> usize {
+        self.sessions.lock().await.len()
+    }
+
+    async fn get_session(&self, session_id: &str) -> Option<Arc<InspectSession>> {
+        self.sessions.lock().await.get(session_id).cloned()
+    }
+
+    async fn remove_session(&self, session_id: &str) -> Option<Arc<InspectSession>> {
+        self.sessions.lock().await.remove(session_id)
+    }
+
+    async fn list_sessions(&self) -> Vec<InspectSessionSummary> {
+        let sessions = {
+            let sessions = self.sessions.lock().await;
+            sessions.values().cloned().collect::<Vec<_>>()
+        };
+
+        let mut summaries = Vec::with_capacity(sessions.len());
+        for session in sessions {
+            summaries.push(session.summary().await);
+        }
+        summaries.sort_by(|left, right| right.connected_at_utc.cmp(&left.connected_at_utc));
+        summaries
+    }
+
+    fn next_session_id(&self) -> String {
+        let seq = self.session_seq.fetch_add(1, Ordering::Relaxed) + 1;
+        format!("inspect-{}-{seq}", unix_timestamp_secs())
+    }
+}
+
+impl InspectSession {
+    fn new(
+        id: String,
+        name: String,
+        transport: InspectTransportKind,
+        endpoint: String,
+        max_history_entries: usize,
+        client: ToolClient,
+    ) -> Self {
+        let now = unix_timestamp_secs();
+        Self {
+            id,
+            name,
+            transport,
+            endpoint,
+            created_at_utc: now,
+            state: Arc::new(Mutex::new(InspectSessionState {
+                status: "connected".to_string(),
+                last_error: None,
+                updated_at_utc: now,
+            })),
+            history: Arc::new(Mutex::new(VecDeque::with_capacity(
+                max_history_entries.max(1),
+            ))),
+            history_seq: AtomicU64::new(0),
+            max_history_entries: max_history_entries.max(1),
+            client,
+        }
+    }
+
+    async fn summary(&self) -> InspectSessionSummary {
+        let state = self.state.lock().await.clone();
+        let history_size = self.history.lock().await.len();
+        InspectSessionSummary {
+            session_id: self.id.clone(),
+            session_name: self.name.clone(),
+            transport: self.transport.as_str().to_string(),
+            endpoint: self.endpoint.clone(),
+            status: state.status,
+            last_error: state.last_error,
+            connected_at_utc: self.created_at_utc,
+            updated_at_utc: state.updated_at_utc,
+            history_size,
+        }
+    }
+
+    async fn list_tools(&self) -> Result<InspectToolsListResponse, ToolCallError> {
+        let started = Instant::now();
+        self.client.refresh_tools().await?;
+        let tools = self.client.tools().list().await;
+        let tool_descriptors = tools
+            .into_iter()
+            .map(map_tool_descriptor)
+            .collect::<Vec<_>>();
+        Ok(InspectToolsListResponse {
+            session_id: self.id.clone(),
+            tool_count: tool_descriptors.len(),
+            duration_ms: started.elapsed().as_millis(),
+            tools: tool_descriptors,
+        })
+    }
+
+    async fn call_tool(
+        &self,
+        tool_name: &str,
+        arguments: Value,
+    ) -> Result<InspectToolCallResponse, ToolCallError> {
+        let started_at_utc = unix_timestamp_secs();
+        let started = Instant::now();
+        let result = self.client.call_by_name(tool_name, arguments).await?;
+        Ok(InspectToolCallResponse {
+            session_id: self.id.clone(),
+            tool_name: tool_name.to_string(),
+            started_at_utc,
+            duration_ms: started.elapsed().as_millis(),
+            result,
+        })
+    }
+
+    async fn history(&self, limit: Option<usize>) -> Vec<InspectHistoryEntry> {
+        let history = self.history.lock().await;
+        let take = limit
+            .unwrap_or(history.len())
+            .min(self.max_history_entries)
+            .min(history.len());
+        let skip = history.len().saturating_sub(take);
+        history.iter().skip(skip).cloned().collect()
+    }
+
+    async fn clear_history(&self) -> usize {
+        let mut history = self.history.lock().await;
+        let cleared = history.len();
+        history.clear();
+        cleared
+    }
+
+    async fn mark_connected(&self) {
+        let mut state = self.state.lock().await;
+        state.status = "connected".to_string();
+        state.last_error = None;
+        state.updated_at_utc = unix_timestamp_secs();
+    }
+
+    async fn mark_error(&self, err: String) {
+        let mut state = self.state.lock().await;
+        state.status = "error".to_string();
+        state.last_error = Some(err);
+        state.updated_at_utc = unix_timestamp_secs();
+    }
+
+    async fn mark_disconnected(&self) {
+        let mut state = self.state.lock().await;
+        state.status = "disconnected".to_string();
+        state.updated_at_utc = unix_timestamp_secs();
+    }
+
+    async fn push_history(
+        &self,
+        kind: &str,
+        summary: impl Into<String>,
+        request: Option<Value>,
+        response: Option<Value>,
+        error: Option<String>,
+    ) {
+        let sequence = self.history_seq.fetch_add(1, Ordering::Relaxed) + 1;
+        let entry = InspectHistoryEntry {
+            id: format!("{}-{sequence}", self.id),
+            ts_utc: unix_timestamp_secs(),
+            kind: kind.to_string(),
+            summary: summary.into(),
+            request,
+            response,
+            error,
+        };
+
+        let mut history = self.history.lock().await;
+        if history.len() >= self.max_history_entries {
+            history.pop_front();
+        }
+        history.push_back(entry);
+    }
+}
+
+fn parse_inspect_transport(raw: &str) -> Result<InspectTransportKind, String> {
+    match raw.trim().to_ascii_lowercase().as_str() {
+        "streamable-http" | "streamable_http" | "streamablehttp" | "http" => {
+            Ok(InspectTransportKind::StreamableHttp)
+        }
+        "sse" => Ok(InspectTransportKind::Sse),
+        "ws" | "wss" | "websocket" => Ok(InspectTransportKind::Ws),
+        "grpc" => Ok(InspectTransportKind::Grpc),
+        _ => Err(format!(
+            "unsupported inspect transport '{raw}'. supported values: streamable-http, sse, ws, grpc"
+        )),
+    }
+}
+
+fn default_session_name(transport: InspectTransportKind, endpoint: &str) -> String {
+    format!("{}:{}", transport.as_str(), endpoint)
+}
+
+fn empty_json_object() -> Value {
+    serde_json::json!({})
+}
+
+fn map_tool_descriptor(metadata: ToolMetadata) -> InspectToolDescriptor {
+    InspectToolDescriptor {
+        name: metadata.name,
+        description: metadata.description,
+        input_schema: metadata.input_schema,
+    }
+}
+
+fn status_for_tool_error(err: &ToolCallError) -> StatusCode {
+    match err {
+        ToolCallError::InvalidEndpoint(_)
+        | ToolCallError::InvalidArguments(_)
+        | ToolCallError::MissingRequired { .. } => StatusCode::BAD_REQUEST,
+        ToolCallError::ToolNotFound { .. } => StatusCode::NOT_FOUND,
+        ToolCallError::AuthorizationRequired { .. } => StatusCode::UNAUTHORIZED,
+        ToolCallError::Protocol(_) | ToolCallError::Transport(_) => StatusCode::BAD_GATEWAY,
+    }
+}
+
+fn session_not_found_response(session_id: &str) -> Response {
+    json_error(
+        StatusCode::NOT_FOUND,
+        &format!("inspect session '{session_id}' was not found"),
+    )
+}
+
+fn parse_call_arguments(arguments: Value) -> Result<Value, String> {
+    if arguments.is_object() {
+        Ok(arguments)
+    } else {
+        Err("tool call arguments must be a JSON object".to_string())
+    }
+}
+
+fn to_json_value<T: Serialize>(value: &T) -> Option<Value> {
+    serde_json::to_value(value).ok()
+}
+
 pub async fn run(config: WebConfig) -> Result<(), String> {
     let _telemetry = init_telemetry(config.log_level, OutputTransport::Stdio, "web", "web");
 
@@ -198,6 +749,7 @@ pub async fn run(config: WebConfig) -> Result<(), String> {
         auth_token: config.auth_token.clone(),
         admin_proxy,
         themes,
+        inspect: InspectManager::new(INSPECT_MAX_SESSIONS, INSPECT_MAX_HISTORY_PER_SESSION),
         hot_reload_url: config
             .hot_reload
             .then(|| format!("http://127.0.0.1:{}", config.hot_reload_port)),
@@ -209,6 +761,14 @@ pub async fn run(config: WebConfig) -> Result<(), String> {
         .route("/health", get(api_health))
         .route("/logs/recent", get(api_logs_recent))
         .route("/logs/ws", get(api_logs_ws))
+        .route("/inspect/connect", post(api_inspect_connect))
+        .route("/inspect/disconnect", post(api_inspect_disconnect))
+        .route("/inspect/session", get(api_inspect_session))
+        .route("/inspect/sessions", get(api_inspect_sessions))
+        .route("/inspect/tools/list", post(api_inspect_tools_list))
+        .route("/inspect/tools/call", post(api_inspect_tools_call))
+        .route("/inspect/history", get(api_inspect_history))
+        .route("/inspect/history/clear", post(api_inspect_history_clear))
         .route("/runtime/health", get(api_runtime_health))
         .route("/runtime/metrics", get(api_runtime_metrics))
         .route("/runtime/sessions", get(api_runtime_sessions))
@@ -310,10 +870,12 @@ fn token_matches(headers: &HeaderMap, uri: &Uri, expected: &str) -> bool {
 }
 
 async fn api_health(State(state): State<AppState>) -> impl IntoResponse {
+    let inspect_sessions = state.inspect.session_count().await;
     Json(serde_json::json!({
         "status": "ok",
         "auth_enabled": state.auth_token.is_some(),
         "runtime_admin_enabled": state.admin_proxy.is_some(),
+        "inspect_sessions": inspect_sessions,
         "log_path": state.log_path,
     }))
 }
@@ -330,6 +892,184 @@ async fn api_logs_recent(
 
 async fn api_logs_ws(ws: WebSocketUpgrade, State(state): State<AppState>) -> impl IntoResponse {
     ws.on_upgrade(move |socket| handle_logs_socket(socket, state.log_sender.subscribe()))
+}
+
+async fn api_inspect_connect(
+    State(state): State<AppState>,
+    Json(payload): Json<InspectConnectRequest>,
+) -> impl IntoResponse {
+    match state.inspect.connect(payload).await {
+        Ok(response) => Json(response).into_response(),
+        Err((status, message)) => json_error(status, &message),
+    }
+}
+
+async fn api_inspect_disconnect(
+    State(state): State<AppState>,
+    Json(payload): Json<InspectDisconnectRequest>,
+) -> impl IntoResponse {
+    let Some(session) = state.inspect.remove_session(&payload.session_id).await else {
+        return session_not_found_response(&payload.session_id);
+    };
+
+    session.mark_disconnected().await;
+
+    Json(InspectDisconnectResponse {
+        session_id: payload.session_id,
+        disconnected: true,
+    })
+    .into_response()
+}
+
+async fn api_inspect_session(
+    State(state): State<AppState>,
+    Query(query): Query<InspectSessionQuery>,
+) -> impl IntoResponse {
+    let Some(session) = state.inspect.get_session(&query.session_id).await else {
+        return session_not_found_response(&query.session_id);
+    };
+    Json(session.summary().await).into_response()
+}
+
+async fn api_inspect_sessions(State(state): State<AppState>) -> impl IntoResponse {
+    Json(serde_json::json!({
+        "sessions": state.inspect.list_sessions().await,
+    }))
+    .into_response()
+}
+
+async fn api_inspect_tools_list(
+    State(state): State<AppState>,
+    Json(payload): Json<InspectToolsListRequest>,
+) -> impl IntoResponse {
+    let Some(session) = state.inspect.get_session(&payload.session_id).await else {
+        return session_not_found_response(&payload.session_id);
+    };
+
+    let request_payload = serde_json::json!({
+        "session_id": payload.session_id,
+    });
+    match session.list_tools().await {
+        Ok(response) => {
+            session.mark_connected().await;
+            session
+                .push_history(
+                    "tools.list",
+                    format!("Listed {} tools", response.tool_count),
+                    Some(request_payload),
+                    to_json_value(&response),
+                    None,
+                )
+                .await;
+            Json(response).into_response()
+        }
+        Err(err) => {
+            let message = err.to_string();
+            session.mark_error(message.clone()).await;
+            session
+                .push_history(
+                    "tools.list.error",
+                    "Failed to list tools",
+                    Some(request_payload),
+                    None,
+                    Some(message.clone()),
+                )
+                .await;
+            json_error(status_for_tool_error(&err), &message)
+        }
+    }
+}
+
+async fn api_inspect_tools_call(
+    State(state): State<AppState>,
+    Json(payload): Json<InspectToolCallRequest>,
+) -> impl IntoResponse {
+    let Some(session) = state.inspect.get_session(&payload.session_id).await else {
+        return session_not_found_response(&payload.session_id);
+    };
+
+    let arguments = match parse_call_arguments(payload.arguments) {
+        Ok(arguments) => arguments,
+        Err(message) => return json_error(StatusCode::BAD_REQUEST, &message),
+    };
+
+    let request_payload = serde_json::json!({
+        "session_id": payload.session_id,
+        "tool_name": payload.tool_name,
+        "arguments": arguments,
+    });
+    let tool_name = request_payload
+        .get("tool_name")
+        .and_then(Value::as_str)
+        .unwrap_or("unknown")
+        .to_string();
+    let call_args = request_payload
+        .get("arguments")
+        .cloned()
+        .unwrap_or_else(empty_json_object);
+
+    match session.call_tool(&tool_name, call_args).await {
+        Ok(response) => {
+            session.mark_connected().await;
+            session
+                .push_history(
+                    "tools.call",
+                    format!("Called tool '{tool_name}'"),
+                    Some(request_payload),
+                    to_json_value(&response),
+                    None,
+                )
+                .await;
+            Json(response).into_response()
+        }
+        Err(err) => {
+            let message = err.to_string();
+            session.mark_error(message.clone()).await;
+            session
+                .push_history(
+                    "tools.call.error",
+                    format!("Failed to call tool '{tool_name}'"),
+                    Some(request_payload),
+                    None,
+                    Some(message.clone()),
+                )
+                .await;
+            json_error(status_for_tool_error(&err), &message)
+        }
+    }
+}
+
+async fn api_inspect_history(
+    State(state): State<AppState>,
+    Query(query): Query<InspectHistoryQuery>,
+) -> impl IntoResponse {
+    let Some(session) = state.inspect.get_session(&query.session_id).await else {
+        return session_not_found_response(&query.session_id);
+    };
+
+    let entries = session.history(query.limit).await;
+    Json(InspectHistoryResponse {
+        session_id: query.session_id,
+        count: entries.len(),
+        entries,
+    })
+    .into_response()
+}
+
+async fn api_inspect_history_clear(
+    State(state): State<AppState>,
+    Json(payload): Json<InspectSessionQuery>,
+) -> impl IntoResponse {
+    let Some(session) = state.inspect.get_session(&payload.session_id).await else {
+        return session_not_found_response(&payload.session_id);
+    };
+
+    let cleared = session.clear_history().await;
+    Json(InspectHistoryClearResponse {
+        session_id: payload.session_id,
+        cleared,
+    })
+    .into_response()
 }
 
 async fn handle_logs_socket(socket: WebSocket, mut rx: broadcast::Receiver<StoredLogRecord>) {
@@ -911,6 +1651,27 @@ mod tests {
     use super::*;
 
     #[test]
+    fn parse_inspect_transport_accepts_aliases() {
+        assert!(matches!(
+            parse_inspect_transport("streamable-http"),
+            Ok(InspectTransportKind::StreamableHttp)
+        ));
+        assert!(matches!(
+            parse_inspect_transport("HTTP"),
+            Ok(InspectTransportKind::StreamableHttp)
+        ));
+        assert!(matches!(
+            parse_inspect_transport("wss"),
+            Ok(InspectTransportKind::Ws)
+        ));
+        assert!(matches!(
+            parse_inspect_transport("grpc"),
+            Ok(InspectTransportKind::Grpc)
+        ));
+        assert!(parse_inspect_transport("stdio").is_err());
+    }
+
+    #[test]
     fn slugify_theme_name_normalizes_characters() {
         assert_eq!(slugify_theme_name("Tokyo Night.itermcolors"), "tokyo-night");
         assert_eq!(slugify_theme_name("One  Dark++"), "one-dark");
@@ -927,5 +1688,35 @@ mod tests {
     fn builtin_theme_has_full_ansi_palette() {
         let theme = builtin_theme();
         assert_eq!(theme.palette.ansi.len(), 16);
+    }
+
+    #[tokio::test]
+    async fn inspect_session_history_respects_capacity() {
+        let client = ToolClientBuilder::new("http://127.0.0.1:1", Transport::StreamableHttp)
+            .build()
+            .expect("build tool client");
+        let session = InspectSession::new(
+            "test-session".to_string(),
+            "test".to_string(),
+            InspectTransportKind::StreamableHttp,
+            "http://127.0.0.1:1".to_string(),
+            2,
+            client,
+        );
+
+        session
+            .push_history("first", "first entry", None, None, None)
+            .await;
+        session
+            .push_history("second", "second entry", None, None, None)
+            .await;
+        session
+            .push_history("third", "third entry", None, None, None)
+            .await;
+
+        let entries = session.history(None).await;
+        assert_eq!(entries.len(), 2);
+        assert_eq!(entries[0].summary, "second entry");
+        assert_eq!(entries[1].summary, "third entry");
     }
 }
