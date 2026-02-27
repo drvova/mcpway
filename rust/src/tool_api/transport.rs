@@ -5,7 +5,9 @@ use eventsource_stream::Eventsource;
 use futures::{SinkExt, StreamExt};
 use reqwest::{RequestBuilder, Url};
 use serde_json::Value;
+use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::TcpStream;
+use tokio::process::{Child, ChildStdin, Command};
 use tokio::sync::{mpsc, oneshot, Mutex, RwLock};
 use tokio::task::JoinHandle;
 use tokio_stream::wrappers::ReceiverStream;
@@ -29,6 +31,7 @@ type WsWriter = futures::stream::SplitSink<WsStream, Message>;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Transport {
+    Stdio,
     StreamableHttp,
     Sse,
     Ws,
@@ -41,6 +44,10 @@ pub(crate) struct TransportOptions {
     pub(crate) headers: HashMap<String, String>,
     pub(crate) connect_timeout: Duration,
     pub(crate) request_timeout: Option<Duration>,
+    pub(crate) stdio_command: Option<String>,
+    pub(crate) stdio_args: Vec<String>,
+    pub(crate) stdio_env: HashMap<String, String>,
+    pub(crate) stdio_cwd: Option<String>,
 }
 
 impl Default for TransportOptions {
@@ -50,11 +57,16 @@ impl Default for TransportOptions {
             headers: HashMap::new(),
             connect_timeout: DEFAULT_CONNECT_TIMEOUT,
             request_timeout: Some(DEFAULT_REQUEST_TIMEOUT),
+            stdio_command: None,
+            stdio_args: Vec::new(),
+            stdio_env: HashMap::new(),
+            stdio_cwd: None,
         }
     }
 }
 
 pub(crate) enum TransportClient {
+    Stdio(StdioTransport),
     StreamableHttp(StreamableHttpTransport),
     Sse(SseTransport),
     Ws(WsTransport),
@@ -67,6 +79,7 @@ impl TransportClient {
         options: TransportOptions,
     ) -> Result<Self, ToolCallError> {
         match transport {
+            Transport::Stdio => Ok(Self::Stdio(StdioTransport::new(options)?)),
             Transport::StreamableHttp => {
                 Ok(Self::StreamableHttp(StreamableHttpTransport::new(options)?))
             }
@@ -78,6 +91,7 @@ impl TransportClient {
 
     pub(crate) async fn send_request(&mut self, request: &Value) -> Result<Value, ToolCallError> {
         match self {
+            Self::Stdio(inner) => inner.send_request(request).await,
             Self::StreamableHttp(inner) => inner.send_request(request).await,
             Self::Sse(inner) => inner.send_request(request).await,
             Self::Ws(inner) => inner.send_request(request).await,
@@ -90,10 +104,254 @@ impl TransportClient {
         notification: &Value,
     ) -> Result<(), ToolCallError> {
         match self {
+            Self::Stdio(inner) => inner.send_notification(notification).await,
             Self::StreamableHttp(inner) => inner.send_notification(notification).await,
             Self::Sse(inner) => inner.send_notification(notification).await,
             Self::Ws(inner) => inner.send_notification(notification).await,
             Self::Grpc(inner) => inner.send_notification(notification).await,
+        }
+    }
+}
+
+pub(crate) struct StdioTransport {
+    command: String,
+    args: Vec<String>,
+    env: HashMap<String, String>,
+    cwd: Option<String>,
+    request_timeout: Option<Duration>,
+    stdin: Option<ChildStdin>,
+    child: Option<Child>,
+    pending: std::sync::Arc<Mutex<HashMap<String, oneshot::Sender<Value>>>>,
+    reader_task: Option<JoinHandle<()>>,
+}
+
+impl StdioTransport {
+    fn new(options: TransportOptions) -> Result<Self, ToolCallError> {
+        let command = options
+            .stdio_command
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(str::to_string)
+            .ok_or_else(|| {
+                ToolCallError::InvalidArguments("stdio command cannot be empty".to_string())
+            })?;
+        let cwd = options.stdio_cwd.and_then(|value| {
+            let trimmed = value.trim();
+            if trimmed.is_empty() {
+                None
+            } else {
+                Some(trimmed.to_string())
+            }
+        });
+
+        Ok(Self {
+            command,
+            args: options.stdio_args,
+            env: options.stdio_env,
+            cwd,
+            request_timeout: options.request_timeout,
+            stdin: None,
+            child: None,
+            pending: std::sync::Arc::new(Mutex::new(HashMap::new())),
+            reader_task: None,
+        })
+    }
+
+    async fn send_request(&mut self, request: &Value) -> Result<Value, ToolCallError> {
+        self.ensure_connected().await?;
+        let request_id = id_key_from_envelope(request).ok_or_else(|| {
+            ToolCallError::Protocol("JSON-RPC request is missing an id".to_string())
+        })?;
+
+        let (tx, rx) = oneshot::channel();
+        self.pending.lock().await.insert(request_id.clone(), tx);
+
+        if let Err(err) = self.send_line(request).await {
+            self.pending.lock().await.remove(&request_id);
+            return Err(err);
+        }
+
+        let timeout = self.request_timeout.unwrap_or(DEFAULT_REQUEST_TIMEOUT);
+        match tokio::time::timeout(timeout, rx).await {
+            Ok(Ok(payload)) => Ok(payload),
+            Ok(Err(_)) => Err(ToolCallError::Transport(
+                "stdio child closed while waiting for response".to_string(),
+            )),
+            Err(_) => {
+                self.pending.lock().await.remove(&request_id);
+                Err(ToolCallError::Transport(format!(
+                    "Timed out waiting for stdio response after {}ms",
+                    timeout.as_millis()
+                )))
+            }
+        }
+    }
+
+    async fn send_notification(&mut self, notification: &Value) -> Result<(), ToolCallError> {
+        self.ensure_connected().await?;
+        self.send_line(notification).await
+    }
+
+    async fn send_line(&mut self, payload: &Value) -> Result<(), ToolCallError> {
+        let line = serde_json::to_string(payload).map_err(|err| {
+            ToolCallError::InvalidArguments(format!("Failed to serialize JSON-RPC payload: {err}"))
+        })?;
+
+        let stdin = self.stdin.as_mut().ok_or_else(|| {
+            ToolCallError::Transport("stdio child stdin is not connected".to_string())
+        })?;
+        stdin.write_all(line.as_bytes()).await.map_err(|err| {
+            ToolCallError::Transport(format!("Failed writing to stdio child: {err}"))
+        })?;
+        stdin.write_all(b"\n").await.map_err(|err| {
+            ToolCallError::Transport(format!("Failed writing newline to stdio child: {err}"))
+        })?;
+        stdin
+            .flush()
+            .await
+            .map_err(|err| ToolCallError::Transport(format!("Failed flushing stdio child: {err}")))
+    }
+
+    async fn ensure_connected(&mut self) -> Result<(), ToolCallError> {
+        if self
+            .reader_task
+            .as_ref()
+            .map(|task| task.is_finished())
+            .unwrap_or(false)
+        {
+            self.child = None;
+            self.stdin = None;
+            self.reader_task = None;
+        }
+
+        if let Some(child) = self.child.as_mut() {
+            match child.try_wait() {
+                Ok(None) => {}
+                Ok(Some(_)) => {
+                    self.child = None;
+                    self.stdin = None;
+                    self.reader_task = None;
+                }
+                Err(err) => {
+                    self.child = None;
+                    self.stdin = None;
+                    self.reader_task = None;
+                    return Err(ToolCallError::Transport(format!(
+                        "Failed to poll stdio child process: {err}"
+                    )));
+                }
+            }
+        }
+
+        if self.stdin.is_some() && self.child.is_some() && self.reader_task.is_some() {
+            return Ok(());
+        }
+
+        self.pending.lock().await.clear();
+
+        let mut command = Command::new(&self.command);
+        command.args(&self.args);
+        command.stdin(std::process::Stdio::piped());
+        command.stdout(std::process::Stdio::piped());
+        command.stderr(std::process::Stdio::piped());
+        if !self.env.is_empty() {
+            command.envs(&self.env);
+        }
+        if let Some(cwd) = self.cwd.as_deref() {
+            command.current_dir(cwd);
+        }
+
+        let mut child = command.spawn().map_err(|err| {
+            ToolCallError::Transport(format!(
+                "Failed to spawn stdio command '{}': {err}",
+                self.command
+            ))
+        })?;
+        let stdin = child.stdin.take().ok_or_else(|| {
+            ToolCallError::Transport("Spawned stdio child missing stdin".to_string())
+        })?;
+        let stdout = child.stdout.take().ok_or_else(|| {
+            ToolCallError::Transport("Spawned stdio child missing stdout".to_string())
+        })?;
+        let stderr = child.stderr.take().ok_or_else(|| {
+            ToolCallError::Transport("Spawned stdio child missing stderr".to_string())
+        })?;
+
+        let command_label = self.command.clone();
+        tokio::spawn(async move {
+            let mut stderr_lines = BufReader::new(stderr).lines();
+            loop {
+                match stderr_lines.next_line().await {
+                    Ok(Some(line)) => {
+                        if !line.trim().is_empty() {
+                            tracing::error!("stdio child stderr ({command_label}): {line}");
+                        }
+                    }
+                    Ok(None) => break,
+                    Err(err) => {
+                        tracing::error!(
+                            "Failed reading stdio child stderr ({command_label}): {err}"
+                        );
+                        break;
+                    }
+                }
+            }
+        });
+
+        let pending = self.pending.clone();
+        let command_label = self.command.clone();
+        let reader_task = tokio::spawn(async move {
+            let mut stdout_lines = BufReader::new(stdout).lines();
+            loop {
+                match stdout_lines.next_line().await {
+                    Ok(Some(line)) => {
+                        let line = line.trim();
+                        if line.is_empty() {
+                            continue;
+                        }
+
+                        let Ok(payload) = serde_json::from_str::<Value>(line) else {
+                            tracing::error!(
+                                "stdio child produced non-JSON line ({command_label}): {line}"
+                            );
+                            continue;
+                        };
+
+                        let Some(id_key) = id_key_from_envelope(&payload) else {
+                            continue;
+                        };
+                        if let Some(tx) = pending.lock().await.remove(&id_key) {
+                            let _ = tx.send(payload);
+                        }
+                    }
+                    Ok(None) => break,
+                    Err(err) => {
+                        tracing::error!(
+                            "Failed reading stdio child stdout ({command_label}): {err}"
+                        );
+                        break;
+                    }
+                }
+            }
+            pending.lock().await.clear();
+        });
+
+        self.stdin = Some(stdin);
+        self.child = Some(child);
+        self.reader_task = Some(reader_task);
+        Ok(())
+    }
+}
+
+impl Drop for StdioTransport {
+    fn drop(&mut self) {
+        self.stdin = None;
+        if let Some(task) = self.reader_task.take() {
+            task.abort();
+        }
+        if let Some(child) = self.child.as_mut() {
+            let _ = child.start_kill();
         }
     }
 }
@@ -735,6 +993,31 @@ fn map_http_status_error(status: reqwest::StatusCode, body: &str) -> ToolCallErr
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn stdio_transport_rejects_missing_command() {
+        let result = TransportClient::new(
+            Transport::Stdio,
+            TransportOptions {
+                stdio_command: None,
+                ..Default::default()
+            },
+        );
+        assert!(matches!(result, Err(ToolCallError::InvalidArguments(_))));
+    }
+
+    #[test]
+    fn stdio_transport_accepts_command() {
+        let result = TransportClient::new(
+            Transport::Stdio,
+            TransportOptions {
+                stdio_command: Some("node".to_string()),
+                stdio_args: vec!["--version".to_string()],
+                ..Default::default()
+            },
+        );
+        assert!(result.is_ok());
+    }
 
     #[test]
     fn unauthorized_status_maps_to_transport_error() {

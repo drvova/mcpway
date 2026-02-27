@@ -16,6 +16,10 @@ pub struct ToolClientBuilder {
     headers: HashMap<String, String>,
     connect_timeout: Duration,
     request_timeout: Option<Duration>,
+    stdio_command: Option<String>,
+    stdio_args: Vec<String>,
+    stdio_env: HashMap<String, String>,
+    stdio_cwd: Option<String>,
 }
 
 impl ToolClientBuilder {
@@ -27,6 +31,10 @@ impl ToolClientBuilder {
             headers: HashMap::new(),
             connect_timeout: DEFAULT_CONNECT_TIMEOUT,
             request_timeout: Some(DEFAULT_REQUEST_TIMEOUT),
+            stdio_command: None,
+            stdio_args: Vec::new(),
+            stdio_env: HashMap::new(),
+            stdio_cwd: None,
         }
     }
 
@@ -55,11 +63,47 @@ impl ToolClientBuilder {
         self
     }
 
+    pub fn stdio_command(mut self, command: impl Into<String>) -> Self {
+        self.stdio_command = Some(command.into());
+        self
+    }
+
+    pub fn stdio_args(mut self, args: Vec<String>) -> Self {
+        self.stdio_args = args;
+        self
+    }
+
+    pub fn stdio_env(mut self, env: HashMap<String, String>) -> Self {
+        self.stdio_env = env;
+        self
+    }
+
+    pub fn stdio_cwd(mut self, cwd: Option<String>) -> Self {
+        self.stdio_cwd = cwd;
+        self
+    }
+
     pub fn build(self) -> Result<ToolClient, ToolCallError> {
-        if self.endpoint.trim().is_empty() {
-            return Err(ToolCallError::InvalidEndpoint(
-                "endpoint cannot be empty".to_string(),
-            ));
+        match self.transport {
+            Transport::Stdio => {
+                let command = self
+                    .stdio_command
+                    .as_deref()
+                    .map(str::trim)
+                    .unwrap_or_default();
+                if command.is_empty() {
+                    return Err(ToolCallError::InvalidArguments(
+                        "stdio command cannot be empty".to_string(),
+                    ));
+                }
+            }
+            Transport::StreamableHttp | Transport::Sse | Transport::Ws | Transport::Grpc => {
+                if self.endpoint.trim().is_empty() {
+                    return Err(ToolCallError::InvalidEndpoint(
+                        "endpoint cannot be empty".to_string(),
+                    ));
+                }
+            }
         }
 
         let transport = TransportClient::new(
@@ -69,6 +113,10 @@ impl ToolClientBuilder {
                 headers: self.headers,
                 connect_timeout: self.connect_timeout,
                 request_timeout: self.request_timeout,
+                stdio_command: self.stdio_command,
+                stdio_args: self.stdio_args,
+                stdio_env: self.stdio_env,
+                stdio_cwd: self.stdio_cwd,
             },
         )?;
 
@@ -84,5 +132,20 @@ mod tests {
     fn build_rejects_empty_endpoint() {
         let result = ToolClientBuilder::new("  ", Transport::StreamableHttp).build();
         assert!(matches!(result, Err(ToolCallError::InvalidEndpoint(_))));
+    }
+
+    #[test]
+    fn build_rejects_stdio_without_command() {
+        let result = ToolClientBuilder::new("", Transport::Stdio).build();
+        assert!(matches!(result, Err(ToolCallError::InvalidArguments(_))));
+    }
+
+    #[test]
+    fn build_accepts_stdio_with_command() {
+        let result = ToolClientBuilder::new("", Transport::Stdio)
+            .stdio_command("node")
+            .stdio_args(vec!["--version".to_string()])
+            .build();
+        assert!(result.is_ok());
     }
 }
