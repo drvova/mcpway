@@ -22,9 +22,8 @@ use crate::grpc_proto::bridge::mcp_bridge_client::McpBridgeClient;
 use crate::grpc_proto::bridge::Envelope;
 use crate::tool_api::error::ToolCallError;
 
-const DEFAULT_CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
+const DEFAULT_CONNECT_TIMEOUT: Duration = Duration::from_millis(1_500);
 const DEFAULT_REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
-const SSE_ENDPOINT_TIMEOUT: Duration = Duration::from_secs(10);
 
 type WsStream = WebSocketStream<MaybeTlsStream<TcpStream>>;
 type WsWriter = futures::stream::SplitSink<WsStream, Message>;
@@ -420,6 +419,7 @@ pub(crate) struct SseTransport {
     headers: HashMap<String, String>,
     client: reqwest::Client,
     request_timeout: Option<Duration>,
+    endpoint_wait_timeout: Duration,
     message_endpoint: std::sync::Arc<RwLock<Option<Url>>>,
     pending: std::sync::Arc<Mutex<HashMap<String, oneshot::Sender<Value>>>>,
     stream_task: Option<JoinHandle<()>>,
@@ -441,6 +441,7 @@ impl SseTransport {
             headers: options.headers,
             client,
             request_timeout: options.request_timeout,
+            endpoint_wait_timeout: options.connect_timeout,
             message_endpoint: std::sync::Arc::new(RwLock::new(None)),
             pending: std::sync::Arc::new(Mutex::new(HashMap::new())),
             stream_task: None,
@@ -558,7 +559,7 @@ impl SseTransport {
     }
 
     async fn wait_for_message_endpoint(&self) -> Result<Url, ToolCallError> {
-        let deadline = tokio::time::Instant::now() + SSE_ENDPOINT_TIMEOUT;
+        let deadline = tokio::time::Instant::now() + self.endpoint_wait_timeout;
         loop {
             if let Some(endpoint) = self.message_endpoint.read().await.clone() {
                 return Ok(endpoint);
@@ -566,7 +567,7 @@ impl SseTransport {
             if tokio::time::Instant::now() >= deadline {
                 return Err(ToolCallError::Transport(format!(
                     "Timed out waiting for SSE message endpoint after {}ms",
-                    SSE_ENDPOINT_TIMEOUT.as_millis()
+                    self.endpoint_wait_timeout.as_millis()
                 )));
             }
             tokio::time::sleep(Duration::from_millis(50)).await;

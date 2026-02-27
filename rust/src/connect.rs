@@ -184,6 +184,7 @@ async fn run_remote_mode(
                     ws_to_stdio::run(
                         endpoint.clone(),
                         config.protocol_version.clone(),
+                        config.connect_timeout_ms,
                         runtime_store,
                         update_rx,
                     )
@@ -193,6 +194,7 @@ async fn run_remote_mode(
                     grpc_to_stdio::run(
                         endpoint.clone(),
                         config.protocol_version.clone(),
+                        config.connect_timeout_ms,
                         runtime_store,
                         update_rx,
                     )
@@ -467,6 +469,9 @@ fn to_gateway_config(config: &ConnectConfig, endpoint: &str, protocol: ConnectPr
         retry_max_delay_ms: config.retry_max_delay_ms,
         circuit_failure_threshold: config.circuit_failure_threshold,
         circuit_cooldown_ms: config.circuit_cooldown_ms,
+        connect_timeout_ms: config.connect_timeout_ms,
+        request_timeout_ms: config.request_timeout_ms,
+        startup_fail_open: config.startup_fail_open,
     }
 }
 

@@ -603,6 +603,9 @@ fn save_remote_profile(
         retry_max_delay_ms: 2_000,
         circuit_failure_threshold: 3,
         circuit_cooldown_ms: 5_000,
+        connect_timeout_ms: config::DEFAULT_CONNECT_TIMEOUT_MS,
+        request_timeout_ms: config::DEFAULT_REQUEST_TIMEOUT_MS,
+        startup_fail_open: true,
     };
 
     generator::save_connect_profile(&connect, protocol)
