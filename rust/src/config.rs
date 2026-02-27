@@ -265,6 +265,8 @@ pub enum LogsConfig {
 pub struct WebConfig {
     pub host: String,
     pub port: u16,
+    pub hot_reload: bool,
+    pub hot_reload_port: u16,
     pub log_file: Option<PathBuf>,
     pub admin_base_url: Option<String>,
     pub admin_token: Option<String>,
@@ -872,6 +874,11 @@ fn parse_web_config_from(raw_args: Vec<String>) -> Result<WebConfig, ConfigError
         .cloned()
         .unwrap_or_else(|| "127.0.0.1".to_string());
     let port = sub.get_one::<u16>("port").copied().unwrap_or(5173);
+    let hot_reload = sub.get_flag("hot-reload");
+    let hot_reload_port = sub
+        .get_one::<u16>("hot-reload-port")
+        .copied()
+        .unwrap_or(5174);
     let log_file = sub.get_one::<String>("log-file").map(PathBuf::from);
     let admin_base_url = sub.get_one::<String>("admin-base-url").cloned();
     let admin_token = sub
@@ -907,6 +914,8 @@ fn parse_web_config_from(raw_args: Vec<String>) -> Result<WebConfig, ConfigError
     Ok(WebConfig {
         host,
         port,
+        hot_reload,
+        hot_reload_port,
         log_file,
         admin_base_url,
         admin_token,
@@ -1537,6 +1546,18 @@ fn build_web_subcommand() -> Command {
                 .value_parser(clap::value_parser!(u16))
                 .value_name("PORT")
                 .default_value("5173"),
+        )
+        .arg(
+            Arg::new("hot-reload")
+                .long("hot-reload")
+                .action(ArgAction::SetTrue),
+        )
+        .arg(
+            Arg::new("hot-reload-port")
+                .long("hot-reload-port")
+                .value_parser(clap::value_parser!(u16))
+                .value_name("PORT")
+                .default_value("5174"),
         )
         .arg(Arg::new("log-file").long("log-file").value_name("PATH"))
         .arg(
@@ -2231,6 +2252,8 @@ mod tests {
             CliCommand::Web(cfg) => {
                 assert_eq!(cfg.host, "127.0.0.1");
                 assert_eq!(cfg.port, 5173);
+                assert!(!cfg.hot_reload);
+                assert_eq!(cfg.hot_reload_port, 5174);
                 assert_eq!(cfg.log_file, None);
                 assert_eq!(cfg.admin_base_url, None);
                 assert_eq!(cfg.admin_token, None);
@@ -2253,6 +2276,9 @@ mod tests {
             "0.0.0.0",
             "--port",
             "6123",
+            "--hot-reload",
+            "--hot-reload-port",
+            "6124",
             "--log-file",
             "./mcpway.ndjson",
             "--admin-base-url",
@@ -2277,8 +2303,13 @@ mod tests {
             CliCommand::Web(cfg) => {
                 assert_eq!(cfg.host, "0.0.0.0");
                 assert_eq!(cfg.port, 6123);
+                assert!(cfg.hot_reload);
+                assert_eq!(cfg.hot_reload_port, 6124);
                 assert_eq!(cfg.log_file, Some(PathBuf::from("./mcpway.ndjson")));
-                assert_eq!(cfg.admin_base_url, Some("http://127.0.0.1:9101".to_string()));
+                assert_eq!(
+                    cfg.admin_base_url,
+                    Some("http://127.0.0.1:9101".to_string())
+                );
                 assert_eq!(cfg.admin_token, Some("secret".to_string()));
                 assert_eq!(cfg.auth_token, Some("ui-secret".to_string()));
                 assert_eq!(
@@ -2286,7 +2317,10 @@ mod tests {
                     "https://example.com/themes.json".to_string()
                 );
                 assert_eq!(cfg.theme_cache_ttl_seconds, 120);
-                assert_eq!(cfg.theme_cache_file, Some(PathBuf::from("./theme-cache.json")));
+                assert_eq!(
+                    cfg.theme_cache_file,
+                    Some(PathBuf::from("./theme-cache.json"))
+                );
                 assert!(cfg.no_open_browser);
                 assert_eq!(cfg.log_level, LogLevel::Debug);
             }

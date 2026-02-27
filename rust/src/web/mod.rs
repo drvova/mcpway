@@ -3,6 +3,7 @@ use std::fs::File;
 use std::io::{Read, Seek, SeekFrom};
 use std::net::{IpAddr, SocketAddr};
 use std::path::{Path, PathBuf};
+use std::process::{Child, Command, Stdio};
 use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -10,7 +11,7 @@ use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
 use axum::extract::{Query, Request, State};
 use axum::http::{HeaderMap, StatusCode, Uri};
 use axum::middleware::{self, Next};
-use axum::response::{IntoResponse, Response};
+use axum::response::{IntoResponse, Redirect, Response};
 use axum::routing::{get, post};
 use axum::{Json, Router};
 use futures::{SinkExt, StreamExt};
@@ -35,6 +36,7 @@ struct AppState {
     auth_token: Option<String>,
     admin_proxy: Option<AdminProxy>,
     themes: ThemeService,
+    hot_reload_url: Option<String>,
 }
 
 #[derive(Clone)]
@@ -154,6 +156,13 @@ struct LogsRecentQuery {
 pub async fn run(config: WebConfig) -> Result<(), String> {
     let _telemetry = init_telemetry(config.log_level, OutputTransport::Stdio, "web", "web");
 
+    if config.hot_reload && config.hot_reload_port == config.port {
+        return Err(format!(
+            "--hot-reload-port ({}) must differ from --port ({})",
+            config.hot_reload_port, config.port
+        ));
+    }
+
     let host: IpAddr = config
         .host
         .parse()
@@ -189,6 +198,9 @@ pub async fn run(config: WebConfig) -> Result<(), String> {
         auth_token: config.auth_token.clone(),
         admin_proxy,
         themes,
+        hot_reload_url: config
+            .hot_reload
+            .then(|| format!("http://127.0.0.1:{}", config.hot_reload_port)),
     };
 
     tokio::spawn(spawn_log_tailer(log_path.clone(), log_sender));
@@ -206,20 +218,43 @@ pub async fn run(config: WebConfig) -> Result<(), String> {
         .with_state(state.clone())
         .layer(middleware::from_fn_with_state(state.clone(), authorize_api));
 
-    let app = Router::new()
-        .nest("/api", api_router)
-        .route("/", get(static_index))
-        .route("/assets/{*path}", get(static_asset))
-        .fallback(get(static_fallback))
-        .with_state(state);
+    let app = if config.hot_reload {
+        Router::new()
+            .nest("/api", api_router)
+            .route("/", get(hot_reload_index))
+            .route("/assets/{*path}", get(hot_reload_passthrough))
+            .fallback(get(hot_reload_fallback))
+            .with_state(state)
+    } else {
+        Router::new()
+            .nest("/api", api_router)
+            .route("/", get(static_index))
+            .route("/assets/{*path}", get(static_asset))
+            .fallback(get(static_fallback))
+            .with_state(state)
+    };
+
+    let _hot_reload_process = if config.hot_reload {
+        Some(spawn_hot_reload_dev_server(&config)?)
+    } else {
+        None
+    };
 
     let listen_url = format!("http://{}:{}", config.host, config.port);
-    tracing::info!("Starting mcpway web inspector at {listen_url}");
+    let inspector_url = if config.hot_reload {
+        format!("http://127.0.0.1:{}", config.hot_reload_port)
+    } else {
+        listen_url.clone()
+    };
+    tracing::info!("Starting mcpway web inspector at {inspector_url}");
     tracing::info!("Using log file: {}", log_path.display());
+    if config.hot_reload {
+        tracing::info!("Hot reload enabled. API server listening at {listen_url}");
+    }
 
     if !config.no_open_browser {
         if should_attempt_browser_launch() {
-            let _ = try_open_browser(&listen_url);
+            let _ = try_open_browser(&inspector_url);
         } else {
             tracing::info!("Skipping automatic browser launch: no graphical session detected");
         }
@@ -747,6 +782,51 @@ async fn static_fallback(uri: Uri) -> Response {
     serve_embedded_file("index.html")
 }
 
+async fn hot_reload_index(State(state): State<AppState>) -> Response {
+    redirect_to_hot_reload(&state, "/")
+}
+
+async fn hot_reload_passthrough(State(state): State<AppState>, uri: Uri) -> Response {
+    let path_and_query = uri
+        .path_and_query()
+        .map(|value| value.as_str())
+        .unwrap_or(uri.path());
+    redirect_to_hot_reload(&state, path_and_query)
+}
+
+async fn hot_reload_fallback(State(state): State<AppState>, uri: Uri) -> Response {
+    if uri.path().starts_with("/api/") {
+        return json_error(StatusCode::NOT_FOUND, "API route not found");
+    }
+
+    let path_and_query = uri
+        .path_and_query()
+        .map(|value| value.as_str())
+        .unwrap_or(uri.path());
+    redirect_to_hot_reload(&state, path_and_query)
+}
+
+fn redirect_to_hot_reload(state: &AppState, path_and_query: &str) -> Response {
+    let Some(base) = state.hot_reload_url.as_deref() else {
+        return json_error(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "hot reload is not configured for this process",
+        );
+    };
+
+    let mut base_url = base.trim_end_matches('/').to_string();
+    let suffix = if path_and_query.starts_with('/') {
+        path_and_query
+    } else {
+        "/"
+    };
+    base_url.push_str(suffix);
+    if !path_and_query.starts_with('/') {
+        base_url.push_str(path_and_query);
+    }
+    Redirect::temporary(&base_url).into_response()
+}
+
 fn serve_embedded_file(path: &str) -> Response {
     let normalized = path.trim_start_matches('/');
     let Some(file) = WEB_DIST.get_file(normalized) else {
@@ -771,6 +851,52 @@ fn json_error(status: StatusCode, message: &str) -> Response {
         })),
     )
         .into_response()
+}
+
+struct ChildProcessGuard {
+    child: Option<Child>,
+}
+
+impl Drop for ChildProcessGuard {
+    fn drop(&mut self) {
+        if let Some(child) = self.child.as_mut() {
+            let _ = child.kill();
+            let _ = child.wait();
+        }
+    }
+}
+
+fn spawn_hot_reload_dev_server(config: &WebConfig) -> Result<ChildProcessGuard, String> {
+    let web_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../web");
+    let port = config.hot_reload_port.to_string();
+    let api_url = if config.host == "0.0.0.0" {
+        format!("http://127.0.0.1:{}", config.port)
+    } else {
+        format!("http://{}:{}", config.host, config.port)
+    };
+    let child = Command::new("npm")
+        .args([
+            "run",
+            "dev",
+            "--",
+            "--host",
+            "127.0.0.1",
+            "--port",
+            port.as_str(),
+            "--strictPort",
+        ])
+        .current_dir(&web_dir)
+        .env("MCPWAY_API_BASE", api_url)
+        .stdout(Stdio::inherit())
+        .stderr(Stdio::inherit())
+        .spawn()
+        .map_err(|err| {
+            format!(
+                "Failed to launch Vite dev server from {}: {err}",
+                web_dir.display()
+            )
+        })?;
+    Ok(ChildProcessGuard { child: Some(child) })
 }
 
 fn unix_timestamp_secs() -> u64 {
