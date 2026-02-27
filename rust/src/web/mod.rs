@@ -175,7 +175,9 @@ struct InspectSession {
     created_at_utc: u64,
     state: Arc<Mutex<InspectSessionState>>,
     history: Arc<Mutex<VecDeque<InspectHistoryEntry>>>,
+    notifications: Arc<Mutex<VecDeque<InspectNotificationEntry>>>,
     history_seq: AtomicU64,
+    notification_seq: AtomicU64,
     max_history_entries: usize,
     client: ToolClient,
 }
@@ -185,6 +187,9 @@ struct InspectSessionState {
     status: String,
     last_error: Option<String>,
     updated_at_utc: u64,
+    metadata: HashMap<String, String>,
+    auth_header_name: Option<String>,
+    auth_bearer_token: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -198,6 +203,7 @@ struct InspectSessionSummary {
     connected_at_utc: u64,
     updated_at_utc: u64,
     history_size: usize,
+    notifications_size: usize,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -209,6 +215,15 @@ struct InspectHistoryEntry {
     request: Option<Value>,
     response: Option<Value>,
     error: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct InspectNotificationEntry {
+    id: String,
+    ts_utc: u64,
+    method: String,
+    payload: Value,
+    summary: String,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -238,7 +253,13 @@ struct InspectToolCallResponse {
 #[derive(Debug, Deserialize)]
 struct InspectConnectRequest {
     transport: String,
-    endpoint: String,
+    endpoint: Option<String>,
+    command: Option<String>,
+    #[serde(default)]
+    args: Vec<String>,
+    #[serde(default)]
+    env: HashMap<String, String>,
+    cwd: Option<String>,
     #[serde(default)]
     headers: HashMap<String, String>,
     protocol_version: Option<String>,
@@ -290,6 +311,13 @@ struct InspectHistoryResponse {
 }
 
 #[derive(Debug, Serialize)]
+struct InspectNotificationsResponse {
+    session_id: String,
+    count: usize,
+    entries: Vec<InspectNotificationEntry>,
+}
+
+#[derive(Debug, Serialize)]
 struct InspectDisconnectResponse {
     session_id: String,
     disconnected: bool,
@@ -301,8 +329,106 @@ struct InspectHistoryClearResponse {
     cleared: usize,
 }
 
+#[derive(Debug, Deserialize)]
+struct InspectNotificationsQuery {
+    session_id: String,
+    limit: Option<usize>,
+}
+
+#[derive(Debug, Deserialize)]
+struct InspectPromptsListRequest {
+    session_id: String,
+    cursor: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct InspectPromptGetRequest {
+    session_id: String,
+    name: String,
+    #[serde(default = "empty_json_object")]
+    arguments: Value,
+}
+
+#[derive(Debug, Deserialize)]
+struct InspectResourcesListRequest {
+    session_id: String,
+    cursor: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct InspectResourceTemplatesListRequest {
+    session_id: String,
+    cursor: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct InspectResourceReadRequest {
+    session_id: String,
+    uri: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct InspectResourceSubscriptionRequest {
+    session_id: String,
+    uri: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct InspectRootsSetRequest {
+    session_id: String,
+    #[serde(default)]
+    roots: Vec<Value>,
+}
+
+#[derive(Debug, Deserialize)]
+struct InspectTaskByIdRequest {
+    session_id: String,
+    task_id: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct InspectPingRequest {
+    session_id: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct InspectMetadataSetRequest {
+    session_id: String,
+    #[serde(default)]
+    metadata: HashMap<String, String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct InspectAuthSetRequest {
+    session_id: String,
+    header_name: Option<String>,
+    bearer_token: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+struct InspectRpcResultResponse {
+    session_id: String,
+    method: String,
+    duration_ms: u128,
+    result: Value,
+}
+
+#[derive(Debug, Serialize)]
+struct InspectMetadataResponse {
+    session_id: String,
+    metadata: HashMap<String, String>,
+}
+
+#[derive(Debug, Serialize)]
+struct InspectAuthStateResponse {
+    session_id: String,
+    header_name: Option<String>,
+    has_bearer_token: bool,
+}
+
 #[derive(Debug, Clone, Copy)]
 enum InspectTransportKind {
+    Stdio,
     StreamableHttp,
     Sse,
     Ws,
@@ -312,6 +438,7 @@ enum InspectTransportKind {
 impl InspectTransportKind {
     fn as_str(&self) -> &'static str {
         match self {
+            Self::Stdio => "stdio",
             Self::StreamableHttp => "streamable-http",
             Self::Sse => "sse",
             Self::Ws => "ws",
@@ -319,12 +446,13 @@ impl InspectTransportKind {
         }
     }
 
-    fn to_tool_transport(self) -> Transport {
+    fn to_tool_transport(self) -> Option<Transport> {
         match self {
-            Self::StreamableHttp => Transport::StreamableHttp,
-            Self::Sse => Transport::Sse,
-            Self::Ws => Transport::Ws,
-            Self::Grpc => Transport::Grpc,
+            Self::Stdio => None,
+            Self::StreamableHttp => Some(Transport::StreamableHttp),
+            Self::Sse => Some(Transport::Sse),
+            Self::Ws => Some(Transport::Ws),
+            Self::Grpc => Some(Transport::Grpc),
         }
     }
 }
@@ -345,13 +473,37 @@ impl InspectManager {
     ) -> Result<InspectConnectResponse, (StatusCode, String)> {
         let transport = parse_inspect_transport(request.transport.as_str())
             .map_err(|message| (StatusCode::BAD_REQUEST, message))?;
-        let endpoint = request.endpoint.trim().to_string();
-        if endpoint.is_empty() {
+        if matches!(transport, InspectTransportKind::Stdio) {
+            let command = request
+                .command
+                .as_deref()
+                .map(str::trim)
+                .filter(|value| !value.is_empty());
+            let args_count = request.args.len();
+            let env_count = request.env.len();
+            let cwd = request.cwd.as_deref().unwrap_or("");
             return Err((
-                StatusCode::BAD_REQUEST,
-                "endpoint cannot be empty".to_string(),
+                StatusCode::NOT_IMPLEMENTED,
+                format!(
+                    "stdio transport is not available yet for web inspector (command='{}', args={args_count}, env={env_count}, cwd='{}'). Use streamable-http, sse, ws, or grpc.",
+                    command.unwrap_or(""),
+                    cwd
+                ),
             ));
         }
+
+        let endpoint = request
+            .endpoint
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(str::to_string)
+            .ok_or_else(|| {
+                (
+                    StatusCode::BAD_REQUEST,
+                    "endpoint cannot be empty for non-stdio transports".to_string(),
+                )
+            })?;
 
         {
             let sessions = self.sessions.lock().await;
@@ -398,7 +550,14 @@ impl InspectManager {
             headers.insert(key.to_string(), value);
         }
 
-        let mut builder = ToolClientBuilder::new(endpoint.clone(), transport.to_tool_transport())
+        let transport_kind = transport.to_tool_transport().ok_or_else(|| {
+            (
+                StatusCode::NOT_IMPLEMENTED,
+                "unsupported inspect transport for tool client".to_string(),
+            )
+        })?;
+
+        let mut builder = ToolClientBuilder::new(endpoint.clone(), transport_kind)
             .protocol_version(protocol_version.to_string())
             .headers(headers)
             .connect_timeout(Duration::from_millis(connect_timeout_ms));
@@ -521,11 +680,18 @@ impl InspectSession {
                 status: "connected".to_string(),
                 last_error: None,
                 updated_at_utc: now,
+                metadata: HashMap::new(),
+                auth_header_name: None,
+                auth_bearer_token: None,
             })),
             history: Arc::new(Mutex::new(VecDeque::with_capacity(
                 max_history_entries.max(1),
             ))),
+            notifications: Arc::new(Mutex::new(VecDeque::with_capacity(
+                max_history_entries.max(1),
+            ))),
             history_seq: AtomicU64::new(0),
+            notification_seq: AtomicU64::new(0),
             max_history_entries: max_history_entries.max(1),
             client,
         }
@@ -534,6 +700,7 @@ impl InspectSession {
     async fn summary(&self) -> InspectSessionSummary {
         let state = self.state.lock().await.clone();
         let history_size = self.history.lock().await.len();
+        let notifications_size = self.notifications.lock().await.len();
         InspectSessionSummary {
             session_id: self.id.clone(),
             session_name: self.name.clone(),
@@ -544,6 +711,7 @@ impl InspectSession {
             connected_at_utc: self.created_at_utc,
             updated_at_utc: state.updated_at_utc,
             history_size,
+            notifications_size,
         }
     }
 
@@ -578,6 +746,25 @@ impl InspectSession {
             duration_ms: started.elapsed().as_millis(),
             result,
         })
+    }
+
+    async fn request_method(
+        &self,
+        method: &str,
+        params: Value,
+    ) -> Result<InspectRpcResultResponse, ToolCallError> {
+        let started = Instant::now();
+        let result = self.client.request(method, params).await?;
+        Ok(InspectRpcResultResponse {
+            session_id: self.id.clone(),
+            method: method.to_string(),
+            duration_ms: started.elapsed().as_millis(),
+            result,
+        })
+    }
+
+    async fn notify_method(&self, method: &str, params: Value) -> Result<(), ToolCallError> {
+        self.client.notify(method, params).await
     }
 
     async fn history(&self, limit: Option<usize>) -> Vec<InspectHistoryEntry> {
@@ -642,10 +829,70 @@ impl InspectSession {
         }
         history.push_back(entry);
     }
+
+    async fn notifications(&self, limit: Option<usize>) -> Vec<InspectNotificationEntry> {
+        let notifications = self.notifications.lock().await;
+        let take = limit
+            .unwrap_or(notifications.len())
+            .min(self.max_history_entries)
+            .min(notifications.len());
+        let skip = notifications.len().saturating_sub(take);
+        notifications.iter().skip(skip).cloned().collect()
+    }
+
+    async fn clear_notifications(&self) -> usize {
+        let mut notifications = self.notifications.lock().await;
+        let cleared = notifications.len();
+        notifications.clear();
+        cleared
+    }
+
+    async fn push_notification(&self, method: &str, payload: Value, summary: impl Into<String>) {
+        let sequence = self.notification_seq.fetch_add(1, Ordering::Relaxed) + 1;
+        let entry = InspectNotificationEntry {
+            id: format!("notify-{}-{sequence}", self.id),
+            ts_utc: unix_timestamp_secs(),
+            method: method.to_string(),
+            payload,
+            summary: summary.into(),
+        };
+
+        let mut notifications = self.notifications.lock().await;
+        if notifications.len() >= self.max_history_entries {
+            notifications.pop_front();
+        }
+        notifications.push_back(entry);
+    }
+
+    async fn set_metadata(&self, metadata: HashMap<String, String>) {
+        let mut state = self.state.lock().await;
+        state.metadata = metadata;
+        state.updated_at_utc = unix_timestamp_secs();
+    }
+
+    async fn metadata(&self) -> HashMap<String, String> {
+        self.state.lock().await.metadata.clone()
+    }
+
+    async fn set_auth_state(&self, header_name: Option<String>, bearer_token: Option<String>) {
+        let mut state = self.state.lock().await;
+        state.auth_header_name = header_name.and_then(non_empty_string);
+        state.auth_bearer_token = bearer_token.and_then(non_empty_string);
+        state.updated_at_utc = unix_timestamp_secs();
+    }
+
+    async fn auth_state(&self) -> (Option<String>, bool) {
+        let state = self.state.lock().await;
+        (
+            state.auth_header_name.clone(),
+            state.auth_bearer_token.is_some(),
+        )
+    }
 }
 
 fn parse_inspect_transport(raw: &str) -> Result<InspectTransportKind, String> {
     match raw.trim().to_ascii_lowercase().as_str() {
+        "stdio" => Ok(InspectTransportKind::Stdio),
         "streamable-http" | "streamable_http" | "streamablehttp" | "http" => {
             Ok(InspectTransportKind::StreamableHttp)
         }
@@ -653,7 +900,7 @@ fn parse_inspect_transport(raw: &str) -> Result<InspectTransportKind, String> {
         "ws" | "wss" | "websocket" => Ok(InspectTransportKind::Ws),
         "grpc" => Ok(InspectTransportKind::Grpc),
         _ => Err(format!(
-            "unsupported inspect transport '{raw}'. supported values: streamable-http, sse, ws, grpc"
+            "unsupported inspect transport '{raw}'. supported values: stdio, streamable-http, sse, ws, grpc"
         )),
     }
 }
@@ -697,6 +944,15 @@ fn parse_call_arguments(arguments: Value) -> Result<Value, String> {
         Ok(arguments)
     } else {
         Err("tool call arguments must be a JSON object".to_string())
+    }
+}
+
+fn non_empty_string(value: String) -> Option<String> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        None
+    } else {
+        Some(trimmed.to_string())
     }
 }
 
@@ -767,8 +1023,44 @@ pub async fn run(config: WebConfig) -> Result<(), String> {
         .route("/inspect/sessions", get(api_inspect_sessions))
         .route("/inspect/tools/list", post(api_inspect_tools_list))
         .route("/inspect/tools/call", post(api_inspect_tools_call))
+        .route("/inspect/prompts/list", post(api_inspect_prompts_list))
+        .route("/inspect/prompts/get", post(api_inspect_prompts_get))
+        .route("/inspect/resources/list", post(api_inspect_resources_list))
+        .route(
+            "/inspect/resources/templates/list",
+            post(api_inspect_resource_templates_list),
+        )
+        .route("/inspect/resources/read", post(api_inspect_resources_read))
+        .route(
+            "/inspect/resources/subscribe",
+            post(api_inspect_resources_subscribe),
+        )
+        .route(
+            "/inspect/resources/unsubscribe",
+            post(api_inspect_resources_unsubscribe),
+        )
+        .route("/inspect/ping", post(api_inspect_ping))
+        .route("/inspect/roots/list", post(api_inspect_roots_list))
+        .route("/inspect/roots/set", post(api_inspect_roots_set))
+        .route(
+            "/inspect/roots/list-changed",
+            post(api_inspect_roots_list_changed),
+        )
+        .route("/inspect/tasks/list", post(api_inspect_tasks_list))
+        .route("/inspect/tasks/get", post(api_inspect_tasks_get))
+        .route("/inspect/tasks/result", post(api_inspect_tasks_result))
+        .route("/inspect/tasks/cancel", post(api_inspect_tasks_cancel))
         .route("/inspect/history", get(api_inspect_history))
         .route("/inspect/history/clear", post(api_inspect_history_clear))
+        .route("/inspect/notifications", get(api_inspect_notifications))
+        .route(
+            "/inspect/notifications/clear",
+            post(api_inspect_notifications_clear),
+        )
+        .route("/inspect/metadata", get(api_inspect_metadata))
+        .route("/inspect/metadata/set", post(api_inspect_metadata_set))
+        .route("/inspect/auth/state", get(api_inspect_auth_state))
+        .route("/inspect/auth/set", post(api_inspect_auth_set))
         .route("/runtime/health", get(api_runtime_health))
         .route("/runtime/metrics", get(api_runtime_metrics))
         .route("/runtime/sessions", get(api_runtime_sessions))
@@ -1039,6 +1331,199 @@ async fn api_inspect_tools_call(
     }
 }
 
+async fn api_inspect_prompts_list(
+    State(state): State<AppState>,
+    Json(payload): Json<InspectPromptsListRequest>,
+) -> impl IntoResponse {
+    let params = match payload.cursor {
+        Some(cursor) => serde_json::json!({ "cursor": cursor }),
+        None => empty_json_object(),
+    };
+    inspect_rpc_call(state, payload.session_id, "prompts/list", params).await
+}
+
+async fn api_inspect_prompts_get(
+    State(state): State<AppState>,
+    Json(payload): Json<InspectPromptGetRequest>,
+) -> impl IntoResponse {
+    if payload.name.trim().is_empty() {
+        return json_error(StatusCode::BAD_REQUEST, "prompt name cannot be empty");
+    }
+
+    if !payload.arguments.is_object() {
+        return json_error(
+            StatusCode::BAD_REQUEST,
+            "prompt arguments must be a JSON object",
+        );
+    }
+
+    let params = serde_json::json!({
+        "name": payload.name,
+        "arguments": payload.arguments,
+    });
+    inspect_rpc_call(state, payload.session_id, "prompts/get", params).await
+}
+
+async fn api_inspect_resources_list(
+    State(state): State<AppState>,
+    Json(payload): Json<InspectResourcesListRequest>,
+) -> impl IntoResponse {
+    let params = match payload.cursor {
+        Some(cursor) => serde_json::json!({ "cursor": cursor }),
+        None => empty_json_object(),
+    };
+    inspect_rpc_call(state, payload.session_id, "resources/list", params).await
+}
+
+async fn api_inspect_resource_templates_list(
+    State(state): State<AppState>,
+    Json(payload): Json<InspectResourceTemplatesListRequest>,
+) -> impl IntoResponse {
+    let params = match payload.cursor {
+        Some(cursor) => serde_json::json!({ "cursor": cursor }),
+        None => empty_json_object(),
+    };
+    inspect_rpc_call(
+        state,
+        payload.session_id,
+        "resources/templates/list",
+        params,
+    )
+    .await
+}
+
+async fn api_inspect_resources_read(
+    State(state): State<AppState>,
+    Json(payload): Json<InspectResourceReadRequest>,
+) -> impl IntoResponse {
+    if payload.uri.trim().is_empty() {
+        return json_error(StatusCode::BAD_REQUEST, "resource uri cannot be empty");
+    }
+    let params = serde_json::json!({ "uri": payload.uri });
+    inspect_rpc_call(state, payload.session_id, "resources/read", params).await
+}
+
+async fn api_inspect_resources_subscribe(
+    State(state): State<AppState>,
+    Json(payload): Json<InspectResourceSubscriptionRequest>,
+) -> impl IntoResponse {
+    if payload.uri.trim().is_empty() {
+        return json_error(StatusCode::BAD_REQUEST, "resource uri cannot be empty");
+    }
+    let params = serde_json::json!({ "uri": payload.uri });
+    inspect_rpc_call(state, payload.session_id, "resources/subscribe", params).await
+}
+
+async fn api_inspect_resources_unsubscribe(
+    State(state): State<AppState>,
+    Json(payload): Json<InspectResourceSubscriptionRequest>,
+) -> impl IntoResponse {
+    if payload.uri.trim().is_empty() {
+        return json_error(StatusCode::BAD_REQUEST, "resource uri cannot be empty");
+    }
+    let params = serde_json::json!({ "uri": payload.uri });
+    inspect_rpc_call(state, payload.session_id, "resources/unsubscribe", params).await
+}
+
+async fn api_inspect_ping(
+    State(state): State<AppState>,
+    Json(payload): Json<InspectPingRequest>,
+) -> impl IntoResponse {
+    inspect_rpc_call(state, payload.session_id, "ping", empty_json_object()).await
+}
+
+async fn api_inspect_roots_list(
+    State(state): State<AppState>,
+    Json(payload): Json<InspectSessionQuery>,
+) -> impl IntoResponse {
+    inspect_rpc_call(state, payload.session_id, "roots/list", empty_json_object()).await
+}
+
+async fn api_inspect_roots_set(
+    State(state): State<AppState>,
+    Json(payload): Json<InspectRootsSetRequest>,
+) -> impl IntoResponse {
+    inspect_rpc_notify(
+        state,
+        payload.session_id,
+        "roots/list",
+        serde_json::json!({ "roots": payload.roots }),
+        "roots.set",
+        "Sent roots/list payload",
+    )
+    .await
+}
+
+async fn api_inspect_roots_list_changed(
+    State(state): State<AppState>,
+    Json(payload): Json<InspectSessionQuery>,
+) -> impl IntoResponse {
+    inspect_rpc_notify(
+        state,
+        payload.session_id,
+        "notifications/roots/list_changed",
+        empty_json_object(),
+        "roots.list_changed",
+        "Sent roots/list_changed notification",
+    )
+    .await
+}
+
+async fn api_inspect_tasks_list(
+    State(state): State<AppState>,
+    Json(payload): Json<InspectSessionQuery>,
+) -> impl IntoResponse {
+    inspect_rpc_call(state, payload.session_id, "tasks/list", empty_json_object()).await
+}
+
+async fn api_inspect_tasks_get(
+    State(state): State<AppState>,
+    Json(payload): Json<InspectTaskByIdRequest>,
+) -> impl IntoResponse {
+    if payload.task_id.trim().is_empty() {
+        return json_error(StatusCode::BAD_REQUEST, "task_id cannot be empty");
+    }
+    inspect_rpc_call(
+        state,
+        payload.session_id,
+        "tasks/get",
+        serde_json::json!({ "taskId": payload.task_id }),
+    )
+    .await
+}
+
+async fn api_inspect_tasks_result(
+    State(state): State<AppState>,
+    Json(payload): Json<InspectTaskByIdRequest>,
+) -> impl IntoResponse {
+    if payload.task_id.trim().is_empty() {
+        return json_error(StatusCode::BAD_REQUEST, "task_id cannot be empty");
+    }
+    inspect_rpc_call(
+        state,
+        payload.session_id,
+        "tasks/result",
+        serde_json::json!({ "taskId": payload.task_id }),
+    )
+    .await
+}
+
+async fn api_inspect_tasks_cancel(
+    State(state): State<AppState>,
+    Json(payload): Json<InspectTaskByIdRequest>,
+) -> impl IntoResponse {
+    if payload.task_id.trim().is_empty() {
+        return json_error(StatusCode::BAD_REQUEST, "task_id cannot be empty");
+    }
+    inspect_rpc_call(
+        state,
+        payload.session_id,
+        "tasks/cancel",
+        serde_json::json!({ "taskId": payload.task_id }),
+    )
+    .await
+}
+
 async fn api_inspect_history(
     State(state): State<AppState>,
     Query(query): Query<InspectHistoryQuery>,
@@ -1070,6 +1555,242 @@ async fn api_inspect_history_clear(
         cleared,
     })
     .into_response()
+}
+
+async fn api_inspect_notifications(
+    State(state): State<AppState>,
+    Query(query): Query<InspectNotificationsQuery>,
+) -> impl IntoResponse {
+    let Some(session) = state.inspect.get_session(&query.session_id).await else {
+        return session_not_found_response(&query.session_id);
+    };
+
+    let entries = session.notifications(query.limit).await;
+    Json(InspectNotificationsResponse {
+        session_id: query.session_id,
+        count: entries.len(),
+        entries,
+    })
+    .into_response()
+}
+
+async fn api_inspect_notifications_clear(
+    State(state): State<AppState>,
+    Json(payload): Json<InspectSessionQuery>,
+) -> impl IntoResponse {
+    let Some(session) = state.inspect.get_session(&payload.session_id).await else {
+        return session_not_found_response(&payload.session_id);
+    };
+
+    let cleared = session.clear_notifications().await;
+    Json(serde_json::json!({
+        "session_id": payload.session_id,
+        "cleared": cleared,
+    }))
+    .into_response()
+}
+
+async fn api_inspect_metadata(
+    State(state): State<AppState>,
+    Query(query): Query<InspectSessionQuery>,
+) -> impl IntoResponse {
+    let Some(session) = state.inspect.get_session(&query.session_id).await else {
+        return session_not_found_response(&query.session_id);
+    };
+
+    Json(InspectMetadataResponse {
+        session_id: query.session_id,
+        metadata: session.metadata().await,
+    })
+    .into_response()
+}
+
+async fn api_inspect_metadata_set(
+    State(state): State<AppState>,
+    Json(payload): Json<InspectMetadataSetRequest>,
+) -> impl IntoResponse {
+    let Some(session) = state.inspect.get_session(&payload.session_id).await else {
+        return session_not_found_response(&payload.session_id);
+    };
+    session.set_metadata(payload.metadata.clone()).await;
+    session
+        .push_history(
+            "metadata.set",
+            "Updated session metadata",
+            Some(serde_json::json!({ "metadata": payload.metadata })),
+            None,
+            None,
+        )
+        .await;
+    Json(InspectMetadataResponse {
+        session_id: payload.session_id,
+        metadata: session.metadata().await,
+    })
+    .into_response()
+}
+
+async fn api_inspect_auth_state(
+    State(state): State<AppState>,
+    Query(query): Query<InspectSessionQuery>,
+) -> impl IntoResponse {
+    let Some(session) = state.inspect.get_session(&query.session_id).await else {
+        return session_not_found_response(&query.session_id);
+    };
+
+    let (header_name, has_bearer_token) = session.auth_state().await;
+    Json(InspectAuthStateResponse {
+        session_id: query.session_id,
+        header_name,
+        has_bearer_token,
+    })
+    .into_response()
+}
+
+async fn api_inspect_auth_set(
+    State(state): State<AppState>,
+    Json(payload): Json<InspectAuthSetRequest>,
+) -> impl IntoResponse {
+    let Some(session) = state.inspect.get_session(&payload.session_id).await else {
+        return session_not_found_response(&payload.session_id);
+    };
+    session
+        .set_auth_state(payload.header_name.clone(), payload.bearer_token.clone())
+        .await;
+    session
+        .push_history(
+            "auth.set",
+            "Updated session auth settings",
+            Some(serde_json::json!({
+                "header_name": payload.header_name,
+                "has_bearer_token": payload
+                    .bearer_token
+                    .as_deref()
+                    .map(|value| !value.trim().is_empty())
+                    .unwrap_or(false),
+            })),
+            None,
+            None,
+        )
+        .await;
+    let (header_name, has_bearer_token) = session.auth_state().await;
+    Json(InspectAuthStateResponse {
+        session_id: payload.session_id,
+        header_name,
+        has_bearer_token,
+    })
+    .into_response()
+}
+
+async fn inspect_rpc_call(
+    state: AppState,
+    session_id: String,
+    method: &'static str,
+    params: Value,
+) -> Response {
+    let Some(session) = state.inspect.get_session(&session_id).await else {
+        return session_not_found_response(&session_id);
+    };
+
+    let request_payload = serde_json::json!({
+        "session_id": session_id,
+        "method": method,
+        "params": params,
+    });
+
+    let call_params = request_payload
+        .get("params")
+        .cloned()
+        .unwrap_or_else(empty_json_object);
+    match session.request_method(method, call_params).await {
+        Ok(response) => {
+            session.mark_connected().await;
+            session
+                .push_history(
+                    "rpc.call",
+                    format!("Called method '{method}'"),
+                    Some(request_payload),
+                    to_json_value(&response),
+                    None,
+                )
+                .await;
+            Json(response).into_response()
+        }
+        Err(err) => {
+            let message = err.to_string();
+            session.mark_error(message.clone()).await;
+            session
+                .push_history(
+                    "rpc.call.error",
+                    format!("Failed method '{method}'"),
+                    Some(request_payload),
+                    None,
+                    Some(message.clone()),
+                )
+                .await;
+            json_error(status_for_tool_error(&err), &message)
+        }
+    }
+}
+
+async fn inspect_rpc_notify(
+    state: AppState,
+    session_id: String,
+    method: &'static str,
+    params: Value,
+    history_kind: &'static str,
+    history_summary: &'static str,
+) -> Response {
+    let Some(session) = state.inspect.get_session(&session_id).await else {
+        return session_not_found_response(&session_id);
+    };
+
+    let request_payload = serde_json::json!({
+        "session_id": session_id,
+        "method": method,
+        "params": params,
+    });
+    let notify_params = request_payload
+        .get("params")
+        .cloned()
+        .unwrap_or_else(empty_json_object);
+    match session.notify_method(method, notify_params.clone()).await {
+        Ok(()) => {
+            session.mark_connected().await;
+            session
+                .push_history(
+                    history_kind,
+                    history_summary,
+                    Some(request_payload),
+                    Some(serde_json::json!({"status": "sent"})),
+                    None,
+                )
+                .await;
+            session
+                .push_notification(method, notify_params, history_summary)
+                .await;
+            Json(serde_json::json!({
+                "session_id": session_id,
+                "method": method,
+                "status": "sent",
+            }))
+            .into_response()
+        }
+        Err(err) => {
+            let message = err.to_string();
+            let history_kind_error = format!("{history_kind}.error");
+            session.mark_error(message.clone()).await;
+            session
+                .push_history(
+                    history_kind_error.as_str(),
+                    format!("Failed to send notification '{method}'"),
+                    Some(request_payload),
+                    None,
+                    Some(message.clone()),
+                )
+                .await;
+            json_error(status_for_tool_error(&err), &message)
+        }
+    }
 }
 
 async fn handle_logs_socket(socket: WebSocket, mut rx: broadcast::Receiver<StoredLogRecord>) {
@@ -1653,6 +2374,10 @@ mod tests {
     #[test]
     fn parse_inspect_transport_accepts_aliases() {
         assert!(matches!(
+            parse_inspect_transport("stdio"),
+            Ok(InspectTransportKind::Stdio)
+        ));
+        assert!(matches!(
             parse_inspect_transport("streamable-http"),
             Ok(InspectTransportKind::StreamableHttp)
         ));
@@ -1668,7 +2393,7 @@ mod tests {
             parse_inspect_transport("grpc"),
             Ok(InspectTransportKind::Grpc)
         ));
-        assert!(parse_inspect_transport("stdio").is_err());
+        assert!(parse_inspect_transport("invalid").is_err());
     }
 
     #[test]

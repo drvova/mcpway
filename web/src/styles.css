@@ -333,6 +333,91 @@
   max-height: 56vh;
 }
 
+.button-row {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.inspector-session-card {
+  display: grid;
+  gap: 4px;
+  padding: 8px;
+}
+
+.inspector-session-title {
+  font-size: 0.78rem;
+  color: color-mix(in oklab, var(--fg) 95%, transparent);
+}
+
+.inspector-session-meta {
+  font-size: 0.7rem;
+  color: color-mix(in oklab, var(--fg) 72%, transparent);
+  overflow-wrap: anywhere;
+}
+
+.inspector-body {
+  grid-template-rows: auto minmax(0, 1fr);
+}
+
+.inspector-empty {
+  font-size: 0.78rem;
+}
+
+.inspector-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.inspector-section {
+  display: grid;
+  gap: 10px;
+  align-content: start;
+}
+
+.inspector-list {
+  max-height: 36vh;
+  display: grid;
+  gap: 8px;
+}
+
+.inspector-list-item {
+  border: 1px solid var(--line-soft);
+  background: color-mix(in oklab, var(--surface-3) 84%, black 16%);
+  padding: 8px;
+  display: grid;
+  gap: 4px;
+}
+
+.inspector-list-item-title {
+  font-size: 0.73rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: color-mix(in oklab, var(--fg) 88%, transparent);
+}
+
+.inspector-list-item-meta {
+  font-size: 0.68rem;
+  color: color-mix(in oklab, var(--fg) 70%, transparent);
+}
+
+.inspector-list-item p {
+  margin: 0;
+  font-size: 0.76rem;
+  line-height: 1.4;
+  color: color-mix(in oklab, var(--fg) 92%, transparent);
+  overflow-wrap: anywhere;
+}
+
+.inspector-error-text {
+  color: color-mix(in oklab, var(--err) 82%, white 18%);
+}
+
+.inspector-result-scroll {
+  max-height: 24vh;
+}
+
 @media (max-width: 1120px) {
   .shell {
     min-height: 100dvh;
