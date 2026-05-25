@@ -708,7 +708,7 @@ impl InspectManager {
         for session in sessions {
             summaries.push(session.summary().await);
         }
-        summaries.sort_by(|left, right| right.connected_at_utc.cmp(&left.connected_at_utc));
+        summaries.sort_by_key(|s| std::cmp::Reverse(s.connected_at_utc));
         summaries
     }
 
