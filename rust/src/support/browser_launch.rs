@@ -59,6 +59,7 @@ pub fn try_open_browser(url: &str) -> Result<(), String> {
 
 #[cfg(test)]
 mod tests {
+    #[cfg(all(unix, not(target_os = "macos")))]
     use super::*;
 
     #[cfg(all(unix, not(target_os = "macos")))]
