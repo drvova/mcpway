@@ -230,19 +230,12 @@ pub async fn run(config: WebConfig) -> Result<(), String> {
 
 fn default_theme_cache_path() -> PathBuf {
     if let Some(home) = user_home_dir() {
-        return home
-            .join(".mcpway")
-            .join("themes")
-            .join("catalog.json");
+        return home.join(".mcpway").join("themes").join("catalog.json");
     }
     PathBuf::from(".mcpway/themes/catalog.json")
 }
 
-async fn authorize_api(
-    State(state): State<AppState>,
-    req: Request,
-    next: Next,
-) -> Response {
+async fn authorize_api(State(state): State<AppState>, req: Request, next: Next) -> Response {
     let Some(expected) = state.auth_token.as_deref() else {
         return next.run(req).await;
     };
@@ -438,10 +431,18 @@ impl ThemeService {
         if !self.cache_file.exists() {
             return Ok(None);
         }
-        let raw = std::fs::read_to_string(&self.cache_file)
-            .map_err(|err| format!("Failed to read theme cache {}: {err}", self.cache_file.display()))?;
-        let parsed = serde_json::from_str::<ThemeCatalog>(&raw)
-            .map_err(|err| format!("Failed to parse theme cache {}: {err}", self.cache_file.display()))?;
+        let raw = std::fs::read_to_string(&self.cache_file).map_err(|err| {
+            format!(
+                "Failed to read theme cache {}: {err}",
+                self.cache_file.display()
+            )
+        })?;
+        let parsed = serde_json::from_str::<ThemeCatalog>(&raw).map_err(|err| {
+            format!(
+                "Failed to parse theme cache {}: {err}",
+                self.cache_file.display()
+            )
+        })?;
         Ok(Some(parsed))
     }
 

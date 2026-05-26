@@ -2278,7 +2278,10 @@ mod tests {
                 assert_eq!(cfg.host, "0.0.0.0");
                 assert_eq!(cfg.port, 6123);
                 assert_eq!(cfg.log_file, Some(PathBuf::from("./mcpway.ndjson")));
-                assert_eq!(cfg.admin_base_url, Some("http://127.0.0.1:9101".to_string()));
+                assert_eq!(
+                    cfg.admin_base_url,
+                    Some("http://127.0.0.1:9101".to_string())
+                );
                 assert_eq!(cfg.admin_token, Some("secret".to_string()));
                 assert_eq!(cfg.auth_token, Some("ui-secret".to_string()));
                 assert_eq!(
@@ -2286,7 +2289,10 @@ mod tests {
                     "https://example.com/themes.json".to_string()
                 );
                 assert_eq!(cfg.theme_cache_ttl_seconds, 120);
-                assert_eq!(cfg.theme_cache_file, Some(PathBuf::from("./theme-cache.json")));
+                assert_eq!(
+                    cfg.theme_cache_file,
+                    Some(PathBuf::from("./theme-cache.json"))
+                );
                 assert!(cfg.no_open_browser);
                 assert_eq!(cfg.log_level, LogLevel::Debug);
             }
