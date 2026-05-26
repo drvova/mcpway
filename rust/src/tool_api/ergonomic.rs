@@ -33,7 +33,7 @@ impl ErgonomicToolsFacade {
         name: &str,
         args: HashMap<String, Value>,
     ) -> Result<Value, ToolCallError> {
-        let object = Map::from_iter(args.into_iter());
+        let object = Map::from_iter(args);
         self.call(name, Value::Object(object)).await
     }
 
